@@ -433,7 +433,7 @@ const AreaNode = memo(({ id, data, selected }) => {
       {/* Title bar */}
       <div onDoubleClick={startEdit} style={{
         position:"absolute",top:0,left:0,right:0,
-        padding:"5px 10px 4px",
+        padding:"10px 14px 8px",
         background:selected?"rgba(245,158,11,0.12)":"rgba(255,255,255,0.55)",
         borderBottom:`1px dashed ${c.border}`,
         cursor:"text",userSelect:"none",
@@ -444,7 +444,7 @@ const AreaNode = memo(({ id, data, selected }) => {
             onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
             onClick={e=>e.stopPropagation()} style={{ color:c.label }}/>
         ) : (
-          <span style={{ fontSize:11,fontWeight:800,color:c.label }}>
+          <span style={{ fontSize:30,fontWeight:800,color:c.label,lineHeight:1.2 }}>
             [{data.areaType}]{data.label?` ${data.label}`:" (더블클릭으로 편집)"}
           </span>
         )}
@@ -1196,19 +1196,33 @@ const CanvasInner = () => {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
+              // ── 엣지 경로 수동 조정 핸들러 ──────────────────
+              onEdgeUpdate={(oldEdge, newConnection) => {
+                setEdges(es => es.map(e => e.id === oldEdge.id ? { ...e, ...newConnection } : e));
+              }}
+              onEdgeUpdateStart={() => {}}
+              onEdgeUpdateEnd={() => {}}
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
               connectionLineType="smoothstep"
               connectionLineStyle={{ stroke:"#3b82f6",strokeWidth:2 }}
               defaultEdgeOptions={{ type:"pipe" }}
-              fitView snapToGrid snapGrid={[10,10]} deleteKeyCode={null}
+              fitView
+              snapToGrid snapGrid={[10,10]}
+              deleteKeyCode={null}
+              // ── 2번: 엣지 경로 수동 조정 가능 ──────────────
+              edgesUpdatable={true}
+              edgeUpdaterRadius={12}
+              // ── 3번: 캔버스 영역 400% 확장 ──────────────────
+              translateExtent={[[-8000,-8000],[8000,8000]]}
+              defaultViewport={{ x:0, y:0, zoom:0.75 }}
             >
               <Controls/>
               <MiniMap nodeColor={n=>n.type==="instrument"?"#a855f7":n.type==="area"?"#93c5fd":"#3b82f6"} maskColor="rgba(0,0,0,0.04)"/>
               <Background variant="dots" gap={20} size={1} color="#cbd5e1"/>
               <Panel position="bottom-left">
                 <div style={{ background:"rgba(255,255,255,0.92)",border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 10px",fontSize:10,color:"#64748b" }}>
-                  Ctrl+C 복사 · Ctrl+V 붙여넣기 · 더블클릭 이름편집 · Del 삭제
+                  Ctrl+C 복사 · Ctrl+V 붙여넣기 · 더블클릭 이름편집 · Del 삭제 · 라인 끝점 드래그로 경로 수정
                 </div>
               </Panel>
             </ReactFlow>
