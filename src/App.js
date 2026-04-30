@@ -776,7 +776,7 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 <input style={I} value={d.label||""} onChange={e=>upN("label",e.target.value)}/>
                 <label style={L}>Notes</label>
                 <textarea style={{ ...I,height:70,resize:"vertical" }} value={d.summary||""} onChange={e=>upN("summary",e.target.value)}/>
-                <div style={{ fontWeight:600,fontSize:30,color:"#334155",margin:"6px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Port Management</div>
+                <div style={{ fontWeight:600,fontSize:25,color:"#334155",margin:"6px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Port Management</div>
                 <div style={{ display:"flex",flexWrap:"wrap",gap:5,marginBottom:6 }}>
                   {["top","bottom","left","right"].map(dir=>(
                     <button key={dir} onClick={()=>onAddHandle(sel.id,dir)} style={{ background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:11 }}>+ {dir}</button>
