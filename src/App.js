@@ -260,7 +260,7 @@ const GLOBAL_CSS = `
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
-const AREA_TYPES = ["Plant","Function","Package","Item"];
+const AREA_TYPES = ["Plant","System","Package","Item"];
 const AREA_COLORS = {
   Plant:    { bg:"rgba(219,234,254,0.45)", border:"#93c5fd", label:"#1d4ed8" },
   Function: { bg:"rgba(220,252,231,0.45)", border:"#86efac", label:"#15803d" },
