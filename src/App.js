@@ -263,7 +263,7 @@ const GLOBAL_CSS = `
 const AREA_TYPES = ["Plant","System","Package","Item"];
 const AREA_COLORS = {
   Plant:    { bg:"rgba(219,234,254,0.45)", border:"#93c5fd", label:"#1d4ed8" },
-  Function: { bg:"rgba(220,252,231,0.45)", border:"#86efac", label:"#15803d" },
+  System:   { bg:"rgba(220,252,231,0.45)", border:"#86efac", label:"#15803d" },
   Package:  { bg:"rgba(254,249,195,0.45)", border:"#fde047", label:"#a16207" },
   Item:     { bg:"rgba(243,232,255,0.45)", border:"#d8b4fe", label:"#7e22ce" },
 };
@@ -673,8 +673,8 @@ const Sidebar = memo(({ onDragStart }) => {
     <div style={{ width:195,background:"#f8fafc",borderRight:"1px solid #e2e8f0",overflowY:"auto",flexShrink:0 }}>
       <div style={{ padding:"10px 14px 7px",fontWeight:800,fontSize:13,color:"#0f172a",borderBottom:"1px solid #e2e8f0",letterSpacing:0.5 }}>Catalog</div>
       <Sec title="Area" cat="Area">
-        {AREA_TYPES.map(at=>{ const c=AREA_COLORS[at]; return (
-          <div key={at} draggable onDragStart={e=>onDragStart(e,"area",at)} style={{ ...iS(c.label),background:c.bg }} {...hov}>▭ {at}</div>
+        {AREA_TYPES.map(at=>{ const c=AREA_COLORS[at]||{ bg:"rgba(219,234,254,0.45)", border:"#93c5fd", label:"#1d4ed8" }; return (
+          <div key={at} draggable onDragStart={e=>onDragStart(e,"area",at)} style={{ ...iS(c?.label||"#1d4ed8"),background:c?.bg||"transparent" }} {...hov}>▭ {at}</div>
         );})}
       </Sec>
       <Sec title="Equipment" cat="Equipment">
