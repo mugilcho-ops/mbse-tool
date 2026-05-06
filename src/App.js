@@ -1039,6 +1039,84 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
 // ─────────────────────────────────────────────────────────────
 // CONNECTION MODAL — default 값 lineType 반영
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// SAVE MEMO MODAL — 저장 시 수정자·수정내용 입력
+// ─────────────────────────────────────────────────────────────
+const SaveMemoModal = ({ nodes, edges, onConfirm, onCancel }) => {
+  const [author,  setAuthor]  = useState("");
+  const [summary, setSummary] = useState("");
+
+  const inp = { width:"100%",padding:"7px 10px",border:"1px solid #e2e8f0",borderRadius:6,fontSize:13,boxSizing:"border-box",marginBottom:12,outline:"none" };
+
+  // 변경 내용 자동 분석
+  const autoDesc = `노드 ${nodes.length}개 · 연결 ${edges.length}개`;
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999 }}>
+      <div style={{ background:"#fff",borderRadius:12,padding:28,minWidth:340,maxWidth:420,boxShadow:"0 12px 40px rgba(0,0,0,0.2)" }}>
+        <div style={{ fontWeight:800,fontSize:16,marginBottom:6,color:"#0f172a" }}>💾 저장 메모</div>
+        <div style={{ fontSize:11,color:"#64748b",marginBottom:18 }}>저장 시 기록할 내용을 입력해 주세요.</div>
+
+        <label style={{ fontSize:12,color:"#334155",fontWeight:600,display:"block",marginBottom:4 }}>수정자 *</label>
+        <input style={inp} value={author} onChange={e=>setAuthor(e.target.value)} placeholder="이름 또는 부서" autoFocus/>
+
+        <label style={{ fontSize:12,color:"#334155",fontWeight:600,display:"block",marginBottom:4 }}>수정 내용 *</label>
+        <textarea style={{ ...inp,height:80,resize:"vertical",fontFamily:"inherit" }}
+          value={summary} onChange={e=>setSummary(e.target.value)}
+          placeholder="어떤 내용을 수정했는지 간략히 입력하세요.&#10;예) Tank T-101 추가, FW 배관 연결"/>
+
+        <div style={{ background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 12px",marginBottom:16,fontSize:11,color:"#64748b" }}>
+          <span style={{ fontWeight:600 }}>현재 상태: </span>{autoDesc}
+        </div>
+
+        <div style={{ display:"flex",gap:8 }}>
+          <button
+            onClick={()=>{ if(!author.trim()||!summary.trim()){ alert("수정자와 수정 내용을 입력해주세요."); return; } onConfirm(author.trim(),summary.trim()); }}
+            style={{ flex:1,background:"#1d4ed8",color:"#fff",border:"none",borderRadius:7,padding:"10px",cursor:"pointer",fontWeight:700,fontSize:13 }}>
+            저장
+          </button>
+          <button onClick={onCancel}
+            style={{ flex:1,background:"#f1f5f9",color:"#334155",border:"1px solid #e2e8f0",borderRadius:7,padding:"10px",cursor:"pointer",fontSize:13 }}>
+            취소
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// LOG DETAIL MODAL — 로그 상세보기
+// ─────────────────────────────────────────────────────────────
+const LogDetailModal = ({ log, onClose }) => {
+  if(!log) return null;
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999 }}>
+      <div style={{ background:"#fff",borderRadius:12,padding:28,minWidth:380,maxWidth:500,boxShadow:"0 12px 40px rgba(0,0,0,0.2)",maxHeight:"80vh",overflowY:"auto" }}>
+        <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16 }}>
+          <div style={{ fontWeight:800,fontSize:15,color:"#0f172a" }}>📋 저장 이력 상세</div>
+          <button onClick={onClose} style={{ background:"#f1f5f9",border:"none",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:12,color:"#64748b" }}>✕ 닫기</button>
+        </div>
+
+        {[
+          ["📅 저장 일시", log.date],
+          ["👤 수정자",     log.author],
+          ["📝 수정 내용",  log.summary],
+          ["📊 저장 시 상태", `노드 ${log.nodeCount}개 · 연결 ${log.edgeCount}개`],
+          ["💾 파일명",     log.filename],
+        ].map(([label,val])=>(
+          <div key={label} style={{ marginBottom:14 }}>
+            <div style={{ fontSize:11,color:"#64748b",fontWeight:600,marginBottom:3 }}>{label}</div>
+            <div style={{ fontSize:13,color:"#1e293b",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 12px",lineHeight:1.6,whiteSpace:"pre-wrap" }}>
+              {val||"—"}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const ConnModal = ({ onConfirm, onCancel, defaultType="Piping" }) => {
   const [lt,setLt]=useState(defaultType);
   useEffect(()=>setLt(defaultType),[defaultType]);
@@ -1082,56 +1160,50 @@ const CanvasInner = () => {
   const [xlsxMsg, setXlsxMsg]     = useState("");
   const [saveMsg,  setSaveMsg]     = useState("");
   const [showLog,  setShowLog]     = useState(false);
-  const [history,  setHistory]     = useState([]);
+  const [history,  setHistory]     = useState([]);     // 저장 이력 (Save 시에만 기록)
+  const [showSaveModal, setShowSaveModal] = useState(false); // 저장 시 메모 모달
+  const [logDetail, setLogDetail]  = useState(null);   // 상세보기 대상 log
   const autoSaveTimer = useRef(null);
-  const prevSnapshot  = useRef(null);
 
   // ── Undo / Redo 스택 ──────────────────────────────────────
-  const undoStack = useRef([]);  // 과거 상태 스택
-  const redoStack = useRef([]);  // 미래 상태 스택
-  const isUndoRedo = useRef(false); // undo/redo 중 스냅샷 방지
-
-  // nodes/edges 변경 시 undo 스택에 push (undo/redo 중 제외)
+  const undoStack   = useRef([]);
+  const redoStack   = useRef([]);
+  const isUndoRedo  = useRef(false);
   const prevNodesRef = useRef(null);
   const prevEdgesRef = useRef(null);
+
   useEffect(()=>{
     if(isUndoRedo.current) return;
     if(prevNodesRef.current===null){ prevNodesRef.current=nodes; prevEdgesRef.current=edges; return; }
-    // 실제로 바뀐 경우만 스택에 추가
     const nChanged = JSON.stringify(prevNodesRef.current)!==JSON.stringify(nodes);
     const eChanged = JSON.stringify(prevEdgesRef.current)!==JSON.stringify(edges);
     if(nChanged||eChanged){
       undoStack.current.push({ nodes:prevNodesRef.current, edges:prevEdgesRef.current });
-      if(undoStack.current.length>50) undoStack.current.shift(); // 최대 50단계
-      redoStack.current = []; // 새 변경이 생기면 redo 초기화
-      prevNodesRef.current=nodes;
-      prevEdgesRef.current=edges;
+      if(undoStack.current.length>50) undoStack.current.shift();
+      redoStack.current=[];
+      prevNodesRef.current=nodes; prevEdgesRef.current=edges;
     }
   },[nodes,edges]); // eslint-disable-line
 
   const undo = useCallback(()=>{
     if(undoStack.current.length===0) return;
-    const prev = undoStack.current.pop();
-    redoStack.current.push({ nodes, edges });
+    const prev=undoStack.current.pop();
+    redoStack.current.push({ nodes,edges });
     isUndoRedo.current=true;
-    setNodes(prev.nodes);
-    setEdges(prev.edges);
-    setSel(null);
+    setNodes(prev.nodes); setEdges(prev.edges); setSel(null);
     setTimeout(()=>{ isUndoRedo.current=false; },50);
   },[nodes,edges,setNodes,setEdges]);
 
   const redo = useCallback(()=>{
     if(redoStack.current.length===0) return;
-    const next = redoStack.current.pop();
-    undoStack.current.push({ nodes, edges });
+    const next=redoStack.current.pop();
+    undoStack.current.push({ nodes,edges });
     isUndoRedo.current=true;
-    setNodes(next.nodes);
-    setEdges(next.edges);
-    setSel(null);
+    setNodes(next.nodes); setEdges(next.edges); setSel(null);
     setTimeout(()=>{ isUndoRedo.current=false; },50);
   },[nodes,edges,setNodes,setEdges]);
 
-  // ── 앱 시작 시 localStorage에서 복원 ─────────────────────
+  // ── 앱 시작 시 localStorage 복원 ─────────────────────────
   useEffect(()=>{
     try {
       const saved = localStorage.getItem("mbse_autosave");
@@ -1140,64 +1212,55 @@ const CanvasInner = () => {
         if(n) setNodes(n);
         if(e) setEdges(e);
         if(h) setHistory(h);
-        setSaveMsg("✅ 자동저장 복원됨");
-        setTimeout(()=>setSaveMsg(""),2500);
+        setSaveMsg("✅ 복원됨");
+        setTimeout(()=>setSaveMsg(""),2000);
       }
     } catch(err){ console.warn("복원 실패",err); }
   },[]); // eslint-disable-line
 
-  // ── 자동저장: nodes/edges 변경 시 2초 뒤 localStorage 저장 ─
+  // ── 자동저장: 2초마다 localStorage (Log 기록 없이 데이터만) ─
   useEffect(()=>{
     if(nodes.length===0 && edges.length===0) return;
     if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(()=>{
       try {
-        // 변경 감지 → History 항목 추가
-        const snapshot = JSON.stringify({ nodes, edges });
-        if(snapshot !== prevSnapshot.current){
-          const now = new Date();
-          const timeStr = now.toLocaleString("ko-KR",{ month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit" });
-          const nDiff = prevSnapshot.current
-            ? nodes.length - JSON.parse(prevSnapshot.current).nodes.length
-            : nodes.length;
-          const eDiff = prevSnapshot.current
-            ? edges.length - JSON.parse(prevSnapshot.current).edges.length
-            : edges.length;
-          const desc = nDiff>0 ? `노드 +${nDiff}개 추가`
-                     : nDiff<0 ? `노드 ${nDiff}개 삭제`
-                     : eDiff>0 ? `연결 +${eDiff}개 추가`
-                     : eDiff<0 ? `연결 ${eDiff}개 삭제`
-                     : "속성 수정";
-          const newLog = { id:Date.now(), time:timeStr, desc, nodes:nodes.length, edges:edges.length };
-          setHistory(h=>{
-            const updated = [newLog, ...h].slice(0,100); // 최대 100개 유지
-            localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history:updated }));
-            return updated;
-          });
-          prevSnapshot.current = snapshot;
-        } else {
-          localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history }));
-        }
-        setSaveMsg("💾 자동저장됨");
-        setTimeout(()=>setSaveMsg(""),1500);
+        localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history }));
+        setSaveMsg("💾 자동저장");
+        setTimeout(()=>setSaveMsg(""),1200);
       } catch(err){ console.warn("자동저장 실패",err); }
     }, 2000);
     return()=>{ if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
-  },[nodes, edges]); // eslint-disable-line
+  },[nodes,edges]); // eslint-disable-line
 
-  // ── Save 버튼: .json 파일 저장 ───────────────────────────
-  const onSave = () => {
+  // ── Save 버튼 클릭 → 메모 모달 오픈 ─────────────────────
+  const onSave = () => setShowSaveModal(true);
+
+  // ── 메모 입력 확인 → 파일 저장 + Log 기록 ────────────────
+  const confirmSave = (author, summary) => {
     const now = new Date();
-    const ts = now.toISOString().replace(/[:.]/g,"-").slice(0,19);
+    const ts  = now.toISOString().replace(/[:.]/g,"-").slice(0,19);
+    const filename = `MBSE_${ts}.json`;
+    // 파일 다운로드
     const blob = new Blob([JSON.stringify({ nodes,edges },null,2)],{ type:"application/json" });
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `MBSE_${ts}.json`;
-    a.click();
-    // 저장 이력 추가
-    const timeStr = now.toLocaleString("ko-KR",{ month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit" });
-    const log = { id:Date.now(), time:timeStr, desc:`💾 파일 저장 (MBSE_${ts}.json)`, nodes:nodes.length, edges:edges.length };
-    setHistory(h=>{ const updated=[log,...h].slice(0,100); localStorage.setItem("mbse_autosave",JSON.stringify({nodes,edges,history:updated})); return updated; });
+    a.href = URL.createObjectURL(blob); a.download = filename; a.click();
+    // Log 기록
+    const dateStr = now.toLocaleString("ko-KR",{ year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit" });
+    const log = {
+      id:       Date.now(),
+      date:     dateStr,
+      author,
+      summary,
+      filename,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+    };
+    setHistory(h=>{
+      const updated=[log,...h].slice(0,200);
+      localStorage.setItem("mbse_autosave",JSON.stringify({ nodes,edges,history:updated }));
+      return updated;
+    });
+    setShowSaveModal(false);
     setSaveMsg("✅ 저장 완료!");
     setTimeout(()=>setSaveMsg(""),2000);
   };
@@ -1495,13 +1558,13 @@ const CanvasInner = () => {
 
           {/* ── History Log 패널 ── */}
           {showLog && (
-            <div style={{ width:260,background:"#0f172a",borderLeft:"1px solid #1e293b",display:"flex",flexDirection:"column",flexShrink:0 }}>
+            <div style={{ width:280,background:"#0f172a",borderLeft:"1px solid #1e293b",display:"flex",flexDirection:"column",flexShrink:0 }}>
               {/* 헤더 */}
               <div style={{ padding:"10px 14px 8px",borderBottom:"1px solid #1e293b",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 }}>
-                <span style={{ fontWeight:800,fontSize:13,color:"#f1f5f9" }}>📋 History Log</span>
+                <span style={{ fontWeight:800,fontSize:13,color:"#f1f5f9" }}>📋 저장 이력</span>
                 <div style={{ display:"flex",gap:6 }}>
                   <button onClick={()=>{
-                    if(window.confirm("히스토리를 전체 삭제할까요?")) {
+                    if(window.confirm("저장 이력을 전체 삭제할까요?")) {
                       setHistory([]);
                       localStorage.removeItem("mbse_autosave");
                     }
@@ -1509,52 +1572,83 @@ const CanvasInner = () => {
                     전체삭제
                   </button>
                   <button onClick={()=>setShowLog(false)}
-                    style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:10 }}>
-                    ✕
-                  </button>
+                    style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:10 }}>✕</button>
                 </div>
               </div>
 
-              {/* 자동저장 상태 표시 */}
-              <div style={{ padding:"6px 14px",borderBottom:"1px solid #1e293b",fontSize:10,color:"#64748b",display:"flex",alignItems:"center",gap:6,flexShrink:0 }}>
-                <div style={{ width:6,height:6,borderRadius:"50%",background:"#22c55e",flexShrink:0 }}/>
-                자동저장 활성화 · 최대 100개 보관
+              {/* 안내 */}
+              <div style={{ padding:"6px 14px",borderBottom:"1px solid #1e293b",fontSize:10,color:"#475569",flexShrink:0 }}>
+                💾 Save 버튼을 누를 때만 이력이 기록됩니다.
               </div>
 
               {/* 로그 목록 */}
-              <div style={{ overflowY:"auto",flex:1,padding:"8px 0" }}>
+              <div style={{ overflowY:"auto",flex:1,padding:"6px 0" }}>
                 {history.length===0 && (
-                  <div style={{ padding:"16px 14px",color:"#475569",fontSize:11,textAlign:"center" }}>
-                    변경 이력이 없습니다.<br/>노드/연결을 추가·수정하면<br/>자동으로 기록됩니다.
+                  <div style={{ padding:"20px 14px",color:"#475569",fontSize:11,textAlign:"center",lineHeight:1.8 }}>
+                    저장 이력이 없습니다.<br/>
+                    <span style={{ color:"#1d4ed8" }}>💾 Save</span> 버튼을 누르면<br/>이력이 기록됩니다.
                   </div>
                 )}
                 {history.map((log,i)=>(
                   <div key={log.id} style={{
-                    padding:"7px 14px",
+                    padding:"10px 14px",
                     borderBottom:"1px solid #1e293b",
-                    background: i===0?"#1e293b":"transparent",
+                    background: i===0?"rgba(29,78,216,0.12)":"transparent",
                   }}>
-                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
-                      <span style={{ fontSize:10,color:"#64748b" }}>{log.time}</span>
-                      {i===0 && <span style={{ fontSize:9,background:"#1d4ed8",color:"#fff",borderRadius:3,padding:"0 5px" }}>최신</span>}
+                    {/* 최신 뱃지 */}
+                    {i===0 && (
+                      <div style={{ display:"inline-block",fontSize:9,background:"#1d4ed8",color:"#fff",borderRadius:3,padding:"0 6px",marginBottom:5,fontWeight:700 }}>
+                        최신
+                      </div>
+                    )}
+                    {/* 3가지 핵심 정보 */}
+                    <div style={{ display:"flex",flexDirection:"column",gap:3,marginBottom:7 }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                        <span style={{ fontSize:9,color:"#475569",width:14 }}>📅</span>
+                        <span style={{ fontSize:11,color:"#94a3b8" }}>{log.date}</span>
+                      </div>
+                      <div style={{ display:"flex",alignItems:"center",gap:5 }}>
+                        <span style={{ fontSize:9,color:"#475569",width:14 }}>👤</span>
+                        <span style={{ fontSize:12,color:"#e2e8f0",fontWeight:600 }}>{log.author}</span>
+                      </div>
+                      <div style={{ display:"flex",alignItems:"flex-start",gap:5 }}>
+                        <span style={{ fontSize:9,color:"#475569",width:14,marginTop:1 }}>📝</span>
+                        <span style={{ fontSize:11,color:"#cbd5e1",lineHeight:1.5,flex:1 }}>
+                          {log.summary.length>40 ? log.summary.slice(0,40)+"…" : log.summary}
+                        </span>
+                      </div>
                     </div>
-                    <div style={{ fontSize:11,color:"#e2e8f0",lineHeight:1.4 }}>{log.desc}</div>
-                    <div style={{ fontSize:10,color:"#475569",marginTop:2 }}>
-                      노드 {log.nodes}개 · 연결 {log.edges}개
-                    </div>
+                    {/* 상세보기 버튼 */}
+                    <button
+                      onClick={()=>setLogDetail(log)}
+                      style={{ width:"100%",background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"4px 0",cursor:"pointer",fontSize:10,fontWeight:600 }}>
+                      🔍 상세보기
+                    </button>
                   </div>
                 ))}
               </div>
 
-              {/* 하단: 현재 세션 정보 */}
+              {/* 하단 */}
               <div style={{ padding:"8px 14px",borderTop:"1px solid #1e293b",fontSize:10,color:"#475569",flexShrink:0 }}>
-                현재 세션: 노드 {nodes.length}개 · 연결 {edges.length}개
+                총 {history.length}건 · 노드 {nodes.length}개 · 연결 {edges.length}개
               </div>
             </div>
           )}
         </div>
       </div>
       {modal&&<ConnModal defaultType={modalDefault} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; }}/>}
+
+      {/* 저장 메모 모달 */}
+      {showSaveModal && (
+        <SaveMemoModal
+          nodes={nodes} edges={edges}
+          onConfirm={confirmSave}
+          onCancel={()=>setShowSaveModal(false)}
+        />
+      )}
+
+      {/* 로그 상세보기 모달 */}
+      {logDetail && <LogDetailModal log={logDetail} onClose={()=>setLogDetail(null)}/>}
     </div>
     </>
   );
