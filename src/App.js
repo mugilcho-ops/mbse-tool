@@ -243,6 +243,16 @@ const GLOBAL_CSS = `
   .react-flow__node.selected .react-flow__handle { opacity: 1 !important; }
   .react-flow__handle:hover { opacity: 1 !important; transform: scale(1.4) !important; }
   .react-flow__handle.connecting { opacity: 1 !important; }
+  /* 범위 선택 박스 스타일 */
+  .react-flow__selection {
+    background: rgba(59,130,246,0.08) !important;
+    border: 1.5px dashed #3b82f6 !important;
+    border-radius: 4px !important;
+  }
+  /* 선택된 노드 강조 */
+  .react-flow__node.selected > div {
+    box-shadow: 0 0 0 2px #3b82f6 !important;
+  }
   .mbse-label-input {
     background: rgba(255,255,255,0.95);
     border: 1.5px solid #3b82f6;
@@ -437,40 +447,80 @@ const AreaNode = memo(({ id, data, selected }) => {
         background:selected?"rgba(245,158,11,0.12)":"rgba(255,255,255,0.55)",
         borderBottom:`1px dashed ${c.border}`,
         cursor:"text",userSelect:"none",
+        display:"flex", alignItems:"center", justifyContent:"space-between",
       }}>
-        {editing ? (
-          <input ref={inputRef} className="mbse-label-input" value={draft}
-            onChange={e=>setDraft(e.target.value)} onBlur={commitEdit}
-            onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
-            onClick={e=>e.stopPropagation()} style={{ color:c.label }}/>
-        ) : (
-          <span style={{ fontSize:30,fontWeight:800,color:c.label,lineHeight:1.2 }}>
-            [{data.areaType}]{data.label?` ${data.label}`:" (더블클릭으로 편집)"}
-          </span>
+        <div style={{ flex:1, minWidth:0 }}>
+          {editing ? (
+            <input ref={inputRef} className="mbse-label-input" value={draft}
+              onChange={e=>setDraft(e.target.value)} onBlur={commitEdit}
+              onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
+              onClick={e=>e.stopPropagation()} style={{ color:c.label }}/>
+          ) : (
+            <span style={{ fontSize:30,fontWeight:800,color:c.label,lineHeight:1.2 }}>
+              [{data.areaType}]{data.label?` ${data.label}`:" (더블클릭으로 편집)"}
+            </span>
+          )}
+        </div>
+        {/* IN / OUT 토글 버튼 */}
+        {hasIO && (
+          <div style={{ display:"flex", gap:4, marginLeft:8, flexShrink:0 }} onClick={e=>e.stopPropagation()}>
+            {inlets.length>0 && (
+              <button
+                onDoubleClick={e=>e.stopPropagation()}
+                onClick={e=>{ e.stopPropagation(); window.dispatchEvent(new CustomEvent("mbse:updatelabel",{ detail:{ id, toggleIO: !data.showIO } })); }}
+                style={{
+                  background: data.showIO ? "#1d4ed8" : "rgba(255,255,255,0.8)",
+                  color: data.showIO ? "#fff" : "#1d4ed8",
+                  border:`1.5px solid #1d4ed8`,
+                  borderRadius:4, padding:"2px 8px", cursor:"pointer",
+                  fontSize:11, fontWeight:700, lineHeight:1.4,
+                }}>
+                IN {inlets.length}
+              </button>
+            )}
+            {outlets.length>0 && (
+              <button
+                onDoubleClick={e=>e.stopPropagation()}
+                onClick={e=>{ e.stopPropagation(); window.dispatchEvent(new CustomEvent("mbse:updatelabel",{ detail:{ id, toggleIO: !data.showIO } })); }}
+                style={{
+                  background: data.showIO ? "#dc2626" : "rgba(255,255,255,0.8)",
+                  color: data.showIO ? "#fff" : "#dc2626",
+                  border:`1.5px solid #dc2626`,
+                  borderRadius:4, padding:"2px 8px", cursor:"pointer",
+                  fontSize:11, fontWeight:700, lineHeight:1.4,
+                }}>
+                OUT {outlets.length}
+              </button>
+            )}
+          </div>
         )}
       </div>
 
-      {/* IO summary */}
+      {/* IO summary — 토글 버튼으로 제어 */}
       {hasIO && (
-        <div style={{ position:"absolute",top:28,left:8,right:8,display:"flex",gap:6,userSelect:"none",pointerEvents:"none" }}>
-          {inlets.length>0 && (
-            <div style={{ flex:1,background:"rgba(255,255,255,0.72)",border:`1px solid ${c.border}`,borderRadius:5,padding:"4px 6px",fontSize:9,lineHeight:1.6 }}>
-              <div style={{ fontWeight:800,color:"#1d4ed8",marginBottom:1 }}>▶ INLET</div>
-              {inlets.map((s,i)=>(
-                <div key={i} style={{ color:"#1e293b",display:"flex",alignItems:"center",gap:3 }}>
-                  <div style={{ width:6,height:6,borderRadius:"50%",background:getFluidColor(s.split(" ")[0]),flexShrink:0 }}/>{s}
+        <div style={{ position:"absolute",top:55,left:8,right:8,userSelect:"none" }}>
+          {data.showIO && (
+            <div style={{ display:"flex",gap:6,pointerEvents:"none" }}>
+              {inlets.length>0 && (
+                <div style={{ flex:1,background:"rgba(255,255,255,0.92)",border:`1px solid ${c.border}`,borderRadius:5,padding:"4px 6px",fontSize:9,lineHeight:1.6,boxShadow:"0 2px 6px rgba(0,0,0,0.08)" }}>
+                  <div style={{ fontWeight:800,color:"#1d4ed8",marginBottom:1 }}>▶ INLET</div>
+                  {inlets.map((s,i)=>(
+                    <div key={i} style={{ color:"#1e293b",display:"flex",alignItems:"center",gap:3 }}>
+                      <div style={{ width:6,height:6,borderRadius:"50%",background:getFluidColor(s.split(" ")[0]),flexShrink:0 }}/>{s}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          )}
-          {outlets.length>0 && (
-            <div style={{ flex:1,background:"rgba(255,255,255,0.72)",border:`1px solid ${c.border}`,borderRadius:5,padding:"4px 6px",fontSize:9,lineHeight:1.6 }}>
-              <div style={{ fontWeight:800,color:"#dc2626",marginBottom:1 }}>◀ OUTLET</div>
-              {outlets.map((s,i)=>(
-                <div key={i} style={{ color:"#1e293b",display:"flex",alignItems:"center",gap:3 }}>
-                  <div style={{ width:6,height:6,borderRadius:"50%",background:getFluidColor(s.split(" ")[0]),flexShrink:0 }}/>{s}
+              )}
+              {outlets.length>0 && (
+                <div style={{ flex:1,background:"rgba(255,255,255,0.92)",border:`1px solid ${c.border}`,borderRadius:5,padding:"4px 6px",fontSize:9,lineHeight:1.6,boxShadow:"0 2px 6px rgba(0,0,0,0.08)" }}>
+                  <div style={{ fontWeight:800,color:"#dc2626",marginBottom:1 }}>◀ OUTLET</div>
+                  {outlets.map((s,i)=>(
+                    <div key={i} style={{ color:"#1e293b",display:"flex",alignItems:"center",gap:3 }}>
+                      <div style={{ width:6,height:6,borderRadius:"50%",background:getFluidColor(s.split(" ")[0]),flexShrink:0 }}/>{s}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
             </div>
           )}
         </div>
@@ -595,7 +645,13 @@ const PipeEdge = ({
   // Process Gas / Material 은 lineText 라벨 표시
   const isSpecial = lt==="Process Gas" || lt==="Material";
   const labelText = data?.lineText || (isSpecial ? lt : null);
-  const showLabel = labelText || data?.serialNo || data?.size;
+
+  // 라인 라벨: Fluid-SizeA 형식 (예: FW-200A)
+  const fluidLabel = data?.fluidSub || "";
+  const sizeLabel  = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
+  const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
+
+  const showLabel = isSpecial ? labelText : pipingLabel;
 
   const mx = (sourceX+targetX)/2;
   const my = (sourceY+targetY)/2;
@@ -621,18 +677,15 @@ const PipeEdge = ({
           <div style={{
             position:"absolute",
             transform:`translate(-50%,-50%) translate(${mx}px,${my}px)`,
-            fontSize:10,fontWeight: isSpecial?700:400,
+            fontSize:10, fontWeight:isSpecial?700:600,
             background:"rgba(255,255,255,0.92)",
-            padding:"1px 6px",borderRadius:4,
+            padding:"1px 6px", borderRadius:4,
             border:`1.5px solid ${baseColor}`,
             color:baseColor,
-            pointerEvents:"none",whiteSpace:"nowrap",
+            pointerEvents:"none", whiteSpace:"nowrap",
             boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
           }}>
-            {isSpecial && labelText
-              ? labelText
-              : [data?.size,data?.serialNo].filter(Boolean).join(" · ")
-            }
+            {showLabel}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -848,9 +901,41 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 {/* Piping 전용: 기존 스펙 */}
                 {(d.lineType==="Piping"||!d.lineType)&&(
                   <>
-                    <label style={L}>Serial No</label><input style={I} value={d.serialNo||""} onChange={e=>upE("serialNo",e.target.value)} placeholder="e.g. L-101"/>
-                    <label style={L}>Size (DN)</label><input style={I} value={d.size||""} onChange={e=>upE("size",e.target.value)} placeholder="e.g. DN200"/>
-                    <label style={L}>Schedule</label><input style={I} value={d.spec||""} onChange={e=>upE("spec",e.target.value)} placeholder="e.g. SCH40"/>
+                    <label style={L}>Serial No</label>
+                    <input style={I} value={d.serialNo||""} onChange={e=>upE("serialNo",e.target.value)} placeholder="e.g. L-101"/>
+
+                    <label style={L}>Size (A)</label>
+                    <div style={{ display:"flex", alignItems:"center", gap:6, marginBottom:7 }}>
+                      <input
+                        style={{ ...I, marginBottom:0, flex:1 }}
+                        value={d.sizeNum||""}
+                        onChange={e=>{
+                          const v=e.target.value.replace(/[^0-9]/g,"");
+                          onUpdateEdge(sel.id,{ ...d, sizeNum:v, size: v ? `${v}A` : "" });
+                        }}
+                        placeholder="숫자만 입력 (e.g. 200)"
+                        type="number" min="0"
+                      />
+                      <span style={{ fontSize:13, fontWeight:700, color:"#334155", flexShrink:0 }}>
+                        {d.sizeNum ? `${d.sizeNum}A` : "— A"}
+                      </span>
+                    </div>
+
+                    <label style={L}>Schedule</label>
+                    <select style={S} value={d.spec||""} onChange={e=>{
+                      if(e.target.value==="직접입력") return;
+                      upE("spec",e.target.value);
+                    }}>
+                      <option value="">Select</option>
+                      <option value="SCH20">SCH20</option>
+                      <option value="SCH40">SCH40</option>
+                      <option value="SCH80">SCH80</option>
+                      <option value="직접입력">직접입력...</option>
+                    </select>
+                    {(d.spec && !["SCH20","SCH40","SCH80",""].includes(d.spec)) && (
+                      <input style={I} value={d.spec||""} onChange={e=>upE("spec",e.target.value)} placeholder="직접 입력"/>
+                    )}
+
                     <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"6px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Fluid</div>
                     <label style={L}>Primary</label>
                     <select style={S} value={d.fluidPrimary||""} onChange={e=>onUpdateEdge(sel.id,{...d,fluidPrimary:e.target.value,fluidSub:""})}>
@@ -867,7 +952,9 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     {d.fluidSub&&(
                       <div style={{ display:"flex",alignItems:"center",gap:8,marginTop:4,marginBottom:8 }}>
                         <div style={{ width:28,height:8,borderRadius:4,background:getFluidColor(d.fluidSub) }}/>
-                        <span style={{ fontSize:11,color:"#64748b" }}>{d.fluidSub}</span>
+                        <span style={{ fontSize:11,color:"#64748b",fontWeight:600 }}>
+                          {d.fluidSub}{d.sizeNum?`-${d.sizeNum}A`:""}
+                        </span>
                       </div>
                     )}
                   </>
@@ -982,17 +1069,138 @@ const ConnModal = ({ onConfirm, onCancel, defaultType="Piping" }) => {
 // ─────────────────────────────────────────────────────────────
 const CanvasInner = () => {
   const wrapRef=useRef(null);
-  const { screenToFlowPosition }=useReactFlow();
+  const { screenToFlowPosition, fitView }=useReactFlow();
   const [nodes,setNodes,onNodesChange]=useNodesState([]);
   const [edges,setEdges,onEdgesChange]=useEdgesState([]);
   const [sel,setSel]       = useState(null);
   const [modal,setModal]   = useState(false);
   const [modalDefault,setModalDefault] = useState("Piping");
   const connRef     = useRef(null);
-  const fileRef     = useRef(null);   // JSON import
-  const xlsxRef     = useRef(null);   // Excel import
+  const fileRef     = useRef(null);
+  const xlsxRef     = useRef(null);
   const clipRef     = useRef(null);
-  const [xlsxMsg, setXlsxMsg] = useState("");
+  const [xlsxMsg, setXlsxMsg]     = useState("");
+  const [saveMsg,  setSaveMsg]     = useState("");
+  const [showLog,  setShowLog]     = useState(false);
+  const [history,  setHistory]     = useState([]);
+  const autoSaveTimer = useRef(null);
+  const prevSnapshot  = useRef(null);
+
+  // ── Undo / Redo 스택 ──────────────────────────────────────
+  const undoStack = useRef([]);  // 과거 상태 스택
+  const redoStack = useRef([]);  // 미래 상태 스택
+  const isUndoRedo = useRef(false); // undo/redo 중 스냅샷 방지
+
+  // nodes/edges 변경 시 undo 스택에 push (undo/redo 중 제외)
+  const prevNodesRef = useRef(null);
+  const prevEdgesRef = useRef(null);
+  useEffect(()=>{
+    if(isUndoRedo.current) return;
+    if(prevNodesRef.current===null){ prevNodesRef.current=nodes; prevEdgesRef.current=edges; return; }
+    // 실제로 바뀐 경우만 스택에 추가
+    const nChanged = JSON.stringify(prevNodesRef.current)!==JSON.stringify(nodes);
+    const eChanged = JSON.stringify(prevEdgesRef.current)!==JSON.stringify(edges);
+    if(nChanged||eChanged){
+      undoStack.current.push({ nodes:prevNodesRef.current, edges:prevEdgesRef.current });
+      if(undoStack.current.length>50) undoStack.current.shift(); // 최대 50단계
+      redoStack.current = []; // 새 변경이 생기면 redo 초기화
+      prevNodesRef.current=nodes;
+      prevEdgesRef.current=edges;
+    }
+  },[nodes,edges]); // eslint-disable-line
+
+  const undo = useCallback(()=>{
+    if(undoStack.current.length===0) return;
+    const prev = undoStack.current.pop();
+    redoStack.current.push({ nodes, edges });
+    isUndoRedo.current=true;
+    setNodes(prev.nodes);
+    setEdges(prev.edges);
+    setSel(null);
+    setTimeout(()=>{ isUndoRedo.current=false; },50);
+  },[nodes,edges,setNodes,setEdges]);
+
+  const redo = useCallback(()=>{
+    if(redoStack.current.length===0) return;
+    const next = redoStack.current.pop();
+    undoStack.current.push({ nodes, edges });
+    isUndoRedo.current=true;
+    setNodes(next.nodes);
+    setEdges(next.edges);
+    setSel(null);
+    setTimeout(()=>{ isUndoRedo.current=false; },50);
+  },[nodes,edges,setNodes,setEdges]);
+
+  // ── 앱 시작 시 localStorage에서 복원 ─────────────────────
+  useEffect(()=>{
+    try {
+      const saved = localStorage.getItem("mbse_autosave");
+      if(saved){
+        const { nodes:n, edges:e, history:h } = JSON.parse(saved);
+        if(n) setNodes(n);
+        if(e) setEdges(e);
+        if(h) setHistory(h);
+        setSaveMsg("✅ 자동저장 복원됨");
+        setTimeout(()=>setSaveMsg(""),2500);
+      }
+    } catch(err){ console.warn("복원 실패",err); }
+  },[]); // eslint-disable-line
+
+  // ── 자동저장: nodes/edges 변경 시 2초 뒤 localStorage 저장 ─
+  useEffect(()=>{
+    if(nodes.length===0 && edges.length===0) return;
+    if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(()=>{
+      try {
+        // 변경 감지 → History 항목 추가
+        const snapshot = JSON.stringify({ nodes, edges });
+        if(snapshot !== prevSnapshot.current){
+          const now = new Date();
+          const timeStr = now.toLocaleString("ko-KR",{ month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit" });
+          const nDiff = prevSnapshot.current
+            ? nodes.length - JSON.parse(prevSnapshot.current).nodes.length
+            : nodes.length;
+          const eDiff = prevSnapshot.current
+            ? edges.length - JSON.parse(prevSnapshot.current).edges.length
+            : edges.length;
+          const desc = nDiff>0 ? `노드 +${nDiff}개 추가`
+                     : nDiff<0 ? `노드 ${nDiff}개 삭제`
+                     : eDiff>0 ? `연결 +${eDiff}개 추가`
+                     : eDiff<0 ? `연결 ${eDiff}개 삭제`
+                     : "속성 수정";
+          const newLog = { id:Date.now(), time:timeStr, desc, nodes:nodes.length, edges:edges.length };
+          setHistory(h=>{
+            const updated = [newLog, ...h].slice(0,100); // 최대 100개 유지
+            localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history:updated }));
+            return updated;
+          });
+          prevSnapshot.current = snapshot;
+        } else {
+          localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history }));
+        }
+        setSaveMsg("💾 자동저장됨");
+        setTimeout(()=>setSaveMsg(""),1500);
+      } catch(err){ console.warn("자동저장 실패",err); }
+    }, 2000);
+    return()=>{ if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
+  },[nodes, edges]); // eslint-disable-line
+
+  // ── Save 버튼: .json 파일 저장 ───────────────────────────
+  const onSave = () => {
+    const now = new Date();
+    const ts = now.toISOString().replace(/[:.]/g,"-").slice(0,19);
+    const blob = new Blob([JSON.stringify({ nodes,edges },null,2)],{ type:"application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `MBSE_${ts}.json`;
+    a.click();
+    // 저장 이력 추가
+    const timeStr = now.toLocaleString("ko-KR",{ month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit" });
+    const log = { id:Date.now(), time:timeStr, desc:`💾 파일 저장 (MBSE_${ts}.json)`, nodes:nodes.length, edges:edges.length };
+    setHistory(h=>{ const updated=[log,...h].slice(0,100); localStorage.setItem("mbse_autosave",JSON.stringify({nodes,edges,history:updated})); return updated; });
+    setSaveMsg("✅ 저장 완료!");
+    setTimeout(()=>setSaveMsg(""),2000);
+  };
 
   // AREA IO 자동계산
   useEffect(()=>{
@@ -1013,11 +1221,12 @@ const CanvasInner = () => {
   // 인라인 편집 이벤트 수신
   useEffect(()=>{
     const fn=e=>{
-      const {id,label,itemNo}=e.detail;
+      const {id,label,itemNo,toggleIO}=e.detail;
       setNodes(ns=>ns.map(n=>{
         if(n.id!==id) return n;
-        if(label!==undefined) return { ...n,data:{ ...n.data,label } };
-        if(itemNo!==undefined) return { ...n,data:{ ...n.data,itemNo } };
+        if(label!==undefined)    return { ...n,data:{ ...n.data,label } };
+        if(itemNo!==undefined)   return { ...n,data:{ ...n.data,itemNo } };
+        if(toggleIO!==undefined) return { ...n,data:{ ...n.data,showIO:toggleIO } };
         return n;
       }));
     };
@@ -1099,6 +1308,10 @@ const CanvasInner = () => {
       const tag=document.activeElement?.tagName?.toLowerCase();
       const inInput=tag==="input"||tag==="textarea"||tag==="select";
       if((e.key==="Delete"||e.key==="Backspace")&&sel&&!inInput){ onDeleteSel(); return; }
+      // Undo
+      if(e.ctrlKey&&e.key==="z"&&!inInput){ e.preventDefault(); undo(); return; }
+      // Redo
+      if((e.ctrlKey&&e.key==="y"||(e.ctrlKey&&e.shiftKey&&e.key==="Z"))&&!inInput){ e.preventDefault(); redo(); return; }
       if(e.ctrlKey&&e.key==="c"&&sel?.position){ clipRef.current=sel; return; }
       if(e.ctrlKey&&e.key==="v"&&clipRef.current){
         const src=clipRef.current;
@@ -1113,7 +1326,7 @@ const CanvasInner = () => {
     };
     window.addEventListener("keydown",fn);
     return()=>window.removeEventListener("keydown",fn);
-  },[sel,onDeleteSel,setNodes]);
+  },[sel,onDeleteSel,setNodes,undo,redo]);
 
   // sel 동기화
   useEffect(()=>{
@@ -1171,6 +1384,30 @@ const CanvasInner = () => {
         <div style={{ height:44,background:"#0f172a",display:"flex",alignItems:"center",padding:"0 16px",gap:8,flexShrink:0 }}>
           <span style={{ color:"#f1f5f9",fontWeight:800,fontSize:14,marginRight:6,letterSpacing:0.5 }}>⬡ MBSE Interface Master</span>
 
+          {/* ↩ Undo / ↪ Redo */}
+          <button onClick={undo}
+            title="되돌리기 (Ctrl+Z)"
+            style={{ background:"#1e293b",color: undoStack.current.length>0?"#94a3b8":"#334155",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor: undoStack.current.length>0?"pointer":"default",fontSize:12 }}>
+            ↩
+          </button>
+          <button onClick={redo}
+            title="다시하기 (Ctrl+Y)"
+            style={{ background:"#1e293b",color: redoStack.current.length>0?"#94a3b8":"#334155",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor: redoStack.current.length>0?"pointer":"default",fontSize:12 }}>
+            ↪
+          </button>
+
+          {/* 구분선 */}
+          <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
+
+          {/* 💾 Save 버튼 */}
+          <button onClick={onSave}
+            style={{ background:"#1d4ed8",color:"#fff",border:"none",borderRadius:5,padding:"3px 12px",cursor:"pointer",fontSize:11,fontWeight:700 }}>
+            💾 Save
+          </button>
+
+          {/* 구분선 */}
+          <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
+
           {/* JSON */}
           <button onClick={onExport} style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>⬇ JSON</button>
           <button onClick={()=>fileRef.current?.click()} style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>⬆ JSON</button>
@@ -1179,13 +1416,30 @@ const CanvasInner = () => {
           {/* 구분선 */}
           <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
 
+          {/* 전체보기 */}
+          <button onClick={()=>fitView({ padding:0.15, duration:400 })}
+            style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>
+            ⊞ 전체보기
+          </button>
+
           {/* Excel */}
           <button onClick={onExcelExport} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 Excel ⬇</button>
           <button onClick={()=>xlsxRef.current?.click()} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 Excel ⬆</button>
           <input ref={xlsxRef} type="file" accept=".xlsx,.xls" style={{ display:"none" }} onChange={onExcelImport}/>
 
+          {/* 구분선 */}
+          <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
+
+          {/* 📋 History Log 버튼 */}
+          <button onClick={()=>setShowLog(v=>!v)}
+            style={{ background: showLog?"#0f172a":"#1e293b", color: showLog?"#fbbf24":"#94a3b8", border:`1px solid ${showLog?"#fbbf24":"#334155"}`, borderRadius:5, padding:"3px 10px", cursor:"pointer", fontSize:11 }}>
+            📋 Log {history.length>0 && <span style={{ background:"#fbbf24",color:"#0f172a",borderRadius:8,padding:"0 5px",fontSize:10,fontWeight:700,marginLeft:3 }}>{history.length}</span>}
+          </button>
+
           {/* 상태 메시지 */}
-          {xlsxMsg && <span style={{ color:"#86efac",fontSize:11,marginLeft:4 }}>{xlsxMsg}</span>}
+          {(xlsxMsg||saveMsg) && (
+            <span style={{ color:"#86efac",fontSize:11,marginLeft:4 }}>{xlsxMsg||saveMsg}</span>
+          )}
 
           <span style={{ marginLeft:"auto",color:"#475569",fontSize:11 }}>{nodes.length} nodes · {edges.length} edges</span>
         </div>
@@ -1207,27 +1461,97 @@ const CanvasInner = () => {
               connectionLineType="smoothstep"
               connectionLineStyle={{ stroke:"#3b82f6",strokeWidth:2 }}
               defaultEdgeOptions={{ type:"pipe" }}
+              // ── fitView: 전체 노드가 화면에 맞게 보임 ─────────
               fitView
+              fitViewOptions={{ padding:0.15, includeHiddenNodes:false }}
+              minZoom={0.05}
+              maxZoom={2}
               snapToGrid snapGrid={[10,10]}
               deleteKeyCode={null}
-              // ── 2번: 엣지 경로 수동 조정 가능 ──────────────
+              // ── 엣지 경로 수동 조정 가능 ─────────────────────
               edgesUpdatable={true}
               edgeUpdaterRadius={12}
-              // ── 3번: 캔버스 영역 400% 확장 ──────────────────
-              translateExtent={[[-8000,-8000],[8000,8000]]}
-              defaultViewport={{ x:0, y:0, zoom:0.75 }}
+              // ── 캔버스 영역 8배 확장 (±16000px) ─────────────
+              translateExtent={[[-16000,-16000],[16000,16000]]}
+              defaultViewport={{ x:0, y:0, zoom:0.5 }}
+              // ── 범위 선택 (드래그로 여러 노드 선택) ──────────
+              selectionMode="partial"
+              selectionOnDrag={true}
+              panOnDrag={[1,2]}
+              multiSelectionKeyCode="Shift"
+              selectionKeyCode={null}
             >
               <Controls/>
               <MiniMap nodeColor={n=>n.type==="instrument"?"#a855f7":n.type==="area"?"#93c5fd":"#3b82f6"} maskColor="rgba(0,0,0,0.04)"/>
               <Background variant="dots" gap={20} size={1} color="#cbd5e1"/>
               <Panel position="bottom-left">
                 <div style={{ background:"rgba(255,255,255,0.92)",border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 10px",fontSize:10,color:"#64748b" }}>
-                  Ctrl+C 복사 · Ctrl+V 붙여넣기 · 더블클릭 이름편집 · Del 삭제 · 라인 끝점 드래그로 경로 수정
+                  드래그 → 범위선택 · Shift+클릭 → 추가선택 · Ctrl+Z 되돌리기 · Ctrl+C/V 복사붙여넣기 · Del 삭제
                 </div>
               </Panel>
             </ReactFlow>
           </div>
           <Inspector sel={sel} nodes={nodes} edges={edges} onUpdateNode={onUpdateNode} onUpdateEdge={onUpdateEdge} onDeleteSel={onDeleteSel} onAddHandle={onAddHandle}/>
+
+          {/* ── History Log 패널 ── */}
+          {showLog && (
+            <div style={{ width:260,background:"#0f172a",borderLeft:"1px solid #1e293b",display:"flex",flexDirection:"column",flexShrink:0 }}>
+              {/* 헤더 */}
+              <div style={{ padding:"10px 14px 8px",borderBottom:"1px solid #1e293b",display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0 }}>
+                <span style={{ fontWeight:800,fontSize:13,color:"#f1f5f9" }}>📋 History Log</span>
+                <div style={{ display:"flex",gap:6 }}>
+                  <button onClick={()=>{
+                    if(window.confirm("히스토리를 전체 삭제할까요?")) {
+                      setHistory([]);
+                      localStorage.removeItem("mbse_autosave");
+                    }
+                  }} style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:10 }}>
+                    전체삭제
+                  </button>
+                  <button onClick={()=>setShowLog(false)}
+                    style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:10 }}>
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              {/* 자동저장 상태 표시 */}
+              <div style={{ padding:"6px 14px",borderBottom:"1px solid #1e293b",fontSize:10,color:"#64748b",display:"flex",alignItems:"center",gap:6,flexShrink:0 }}>
+                <div style={{ width:6,height:6,borderRadius:"50%",background:"#22c55e",flexShrink:0 }}/>
+                자동저장 활성화 · 최대 100개 보관
+              </div>
+
+              {/* 로그 목록 */}
+              <div style={{ overflowY:"auto",flex:1,padding:"8px 0" }}>
+                {history.length===0 && (
+                  <div style={{ padding:"16px 14px",color:"#475569",fontSize:11,textAlign:"center" }}>
+                    변경 이력이 없습니다.<br/>노드/연결을 추가·수정하면<br/>자동으로 기록됩니다.
+                  </div>
+                )}
+                {history.map((log,i)=>(
+                  <div key={log.id} style={{
+                    padding:"7px 14px",
+                    borderBottom:"1px solid #1e293b",
+                    background: i===0?"#1e293b":"transparent",
+                  }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:2 }}>
+                      <span style={{ fontSize:10,color:"#64748b" }}>{log.time}</span>
+                      {i===0 && <span style={{ fontSize:9,background:"#1d4ed8",color:"#fff",borderRadius:3,padding:"0 5px" }}>최신</span>}
+                    </div>
+                    <div style={{ fontSize:11,color:"#e2e8f0",lineHeight:1.4 }}>{log.desc}</div>
+                    <div style={{ fontSize:10,color:"#475569",marginTop:2 }}>
+                      노드 {log.nodes}개 · 연결 {log.edges}개
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* 하단: 현재 세션 정보 */}
+              <div style={{ padding:"8px 14px",borderTop:"1px solid #1e293b",fontSize:10,color:"#475569",flexShrink:0 }}>
+                현재 세션: 노드 {nodes.length}개 · 연결 {edges.length}개
+              </div>
+            </div>
+          )}
         </div>
       </div>
       {modal&&<ConnModal defaultType={modalDefault} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; }}/>}
