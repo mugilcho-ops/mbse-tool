@@ -1212,16 +1212,224 @@ const InstrumentNode = memo(({ data, selected }) => (
 // PIPE EDGE
 // ─────────────────────────────────────────────────────────────
 // ORTHOGONAL PATH BUILDER
-// waypoints 기반 직각 꺾임 경로 생성 (Excel/PPT 꺾인선 방식)
+// waypoints 기반 직각 꺾임 경로 (수평→수직)
 // ─────────────────────────────────────────────────────────────
 const buildOrthogonalPath = (sx, sy, tx, ty, waypoints=[]) => {
   if (waypoints.length === 0) {
-    // 자동 직각: 수평 → 수직
     const mx = (sx + tx) / 2;
     return `M${sx},${sy} L${mx},${sy} L${mx},${ty} L${tx},${ty}`;
   }
   const pts = [{x:sx,y:sy}, ...waypoints, {x:tx,y:ty}];
-  return pts.map((p,i) => (i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`)).join(" ");
+  return pts.map((p,i)=>(i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`)).join(" ");
+};
+
+// 자동 꺾임 경로의 꺾임점 좌표 계산 (waypoints 없을 때 기본 핸들 위치)
+const getDefaultBendPoints = (sx,sy,tx,ty) => {
+  const mx = (sx+tx)/2;
+  return [
+    {x:sx,y:sy},   // 시작점
+    {x:mx,y:sy},   // 꺾임1
+    {x:mx,y:ty},   // 꺾임2
+    {x:tx,y:ty},   // 끝점
+  ];
+};
+
+// ─────────────────────────────────────────────────────────────
+// PIPE EDGE
+// - 선택하면 시작·끝·꺾임점에 노란 원 핸들 표시
+// - 핸들 드래그로 Route 조정 (PPT/Excel 꺾인선 방식)
+// - 시작·끝 핸들은 자유 이동, 꺾임 핸들은 수직/수평 제약
+// ─────────────────────────────────────────────────────────────
+const PipeEdge = ({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition, data, selected,
+}) => {
+  const lt        = data?.lineType || "Piping";
+  const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
+  const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
+  const stroke    = selected ? "#f59e0b" : baseColor;
+  const sw        = ls.sw;
+  const mkId      = `mk_${id}`;
+
+  const icStatusColor = {"OPEN":"#CA8A04","IN PROGRESS":"#2563EB","CLOSED":"#16A34A","OVERDUE":"#DC2626"};
+  const fluidLabel  = data?.fluidSub || "";
+  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size||"");
+  const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
+  const isSpecial   = lt==="Process Gas"||lt==="Material";
+  const labelText   = data?.lineText||(isSpecial?lt:null);
+  const showLabel   = isSpecial?labelText:pipingLabel;
+  const icNo        = data?.ic_no||"";
+  const icStatus    = data?.ic_status||"";
+  const icColor     = icStatusColor[icStatus]||"#64748B";
+
+  const waypoints = data?.waypoints||[];
+  const edgePath  = buildOrthogonalPath(sourceX,sourceY,targetX,targetY,waypoints);
+
+  // 라벨 위치
+  const allPts = [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+  const mid    = Math.floor(allPts.length/2);
+  const mx     = (allPts[Math.max(0,mid-1)].x+allPts[mid < allPts.length ? mid : mid-1].x)/2;
+  const my     = (allPts[Math.max(0,mid-1)].y+allPts[mid < allPts.length ? mid : mid-1].y)/2;
+
+  // 핸들 위치 계산:
+  // waypoints가 없으면 기본 꺾임점 4개, 있으면 waypoints를 꺾임점으로 사용
+  const handlePoints = waypoints.length === 0
+    ? getDefaultBendPoints(sourceX,sourceY,targetX,targetY)
+    : [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+
+  // SVG 좌표 변환 헬퍼
+  const getSVGPos = (svg, ev) => {
+    const pt = svg.createSVGPoint();
+    pt.x=ev.clientX; pt.y=ev.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  };
+
+  // ── 핸들 드래그 ─────────────────────────────────────────
+  const onHandleDrag = useCallback((e, hIdx) => {
+    e.stopPropagation();
+    const svg = e.target.closest("svg"); if(!svg) return;
+    const isStart = hIdx===0;
+    const isEnd   = hIdx===handlePoints.length-1;
+
+    // 현재 waypoints (없으면 기본 꺾임점에서 중간 2개를 초기 waypoints로 설정)
+    const initWp = waypoints.length===0
+      ? [{x:(sourceX+targetX)/2,y:sourceY},{x:(sourceX+targetX)/2,y:targetY}]
+      : [...waypoints];
+
+    const origPos = getSVGPos(svg,e);
+    const origWp  = initWp.map(p=>({...p}));
+    const origHPts= getDefaultBendPoints(sourceX,sourceY,targetX,targetY);
+
+    const onMove = mv => {
+      const cur = getSVGPos(svg,mv);
+      const dx=cur.x-origPos.x, dy=cur.y-origPos.y;
+      const newWp = origWp.map(p=>({...p}));
+
+      if(isStart || isEnd) {
+        // 시작/끝점: 꺾임선 전체 구조 유지하며 이동
+        if(isStart){
+          newWp[0]={x:origWp[0].x, y:origWp[0].y+dy}; // 첫 꺾임y 조정
+        } else {
+          newWp[newWp.length-1]={x:origWp[newWp.length-1].x, y:origWp[newWp.length-1].y+dy};
+        }
+      } else {
+        // 중간 꺾임점: 수평/수직 방향 결정
+        const wpIdx = hIdx-1; // handlePoints 인덱스 → waypoints 인덱스
+        const prev = wpIdx>0 ? origWp[wpIdx-1] : {x:sourceX,y:sourceY};
+        const isHoriz = Math.abs(prev.y - origWp[wpIdx].y) < 10;
+        if(isHoriz){
+          newWp[wpIdx]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx].y};
+          // 인접 수직 세그먼트도 같이 이동
+          if(wpIdx+1<newWp.length) newWp[wpIdx+1]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx+1].y};
+          if(wpIdx>0) newWp[wpIdx-1]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx-1].y};
+        } else {
+          newWp[wpIdx]={x:origWp[wpIdx].x, y:origWp[wpIdx].y+dy};
+          if(wpIdx+1<newWp.length) newWp[wpIdx+1]={x:origWp[wpIdx+1].x, y:origWp[wpIdx].y+dy};
+          if(wpIdx>0) newWp[wpIdx-1]={x:origWp[wpIdx-1].x, y:origWp[wpIdx].y+dy};
+        }
+      }
+      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+    };
+    const onUp=()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
+    window.addEventListener("mousemove",onMove);
+    window.addEventListener("mouseup",onUp);
+  },[id,waypoints,handlePoints,sourceX,sourceY,targetX,targetY]);
+
+  // 선 클릭 → 중간 꺾임점 추가 (이미 waypoints 있으면 세그먼트 분할)
+  const onPathClick = useCallback(e=>{
+    if(!selected) return;
+    e.stopPropagation();
+    const svg=e.target.closest("svg"); if(!svg) return;
+    const pos=getSVGPos(svg,e);
+    // 가장 가까운 세그먼트에 꺾임점 삽입
+    const pts=[{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+    let minD=Infinity,insIdx=0;
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1];
+      const dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy||1;
+      const t=Math.max(0,Math.min(1,((pos.x-a.x)*dx+(pos.y-a.y)*dy)/len));
+      const d=Math.hypot(pos.x-(a.x+t*dx),pos.y-(a.y+t*dy));
+      if(d<minD){minD=d;insIdx=i;}
+    }
+    const a=pts[insIdx],b=pts[insIdx+1];
+    const isH=Math.abs(a.y-b.y)<10;
+    const newWp=[...waypoints];
+    newWp.splice(insIdx,0,isH?{x:pos.x,y:a.y}:{x:a.x,y:pos.y});
+    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+  },[id,selected,waypoints,sourceX,sourceY,targetX,targetY]);
+
+  return (
+    <g>
+      <defs>
+        <marker id={mkId} markerWidth="5" markerHeight="4" refX="4.5" refY="2"
+          orient="auto" markerUnits="strokeWidth">
+          <polygon points="0 0,5 2,0 4" fill={stroke}/>
+        </marker>
+      </defs>
+
+      {/* 히트영역 */}
+      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16}
+        style={{cursor:selected?"crosshair":"pointer"}} onClick={onPathClick}/>
+
+      {/* 실제 라인 */}
+      <path d={edgePath} fill="none" stroke={stroke}
+        strokeWidth={selected?sw+0.5:sw} strokeDasharray={ls.dash}
+        markerEnd={`url(#${mkId})`} style={{pointerEvents:"none"}}/>
+
+      {/* 선택 시 핸들 — 시작·끝·꺾임점 모두 노란 원 */}
+      {selected && handlePoints.map((hp,i)=>{
+        const isEndPt = i===0||i===handlePoints.length-1;
+        return (
+          <g key={i}>
+            {/* 노란 원 핸들 */}
+            <circle cx={hp.x} cy={hp.y} r={isEndPt?5:6}
+              fill={isEndPt?"white":"#f59e0b"}
+              stroke="#f59e0b" strokeWidth={isEndPt?2:1.5}
+              style={{cursor:"move",pointerEvents:"all"}}
+              onMouseDown={e=>onHandleDrag(e,i)}/>
+            {/* 더블클릭으로 중간 꺾임점 삭제 (끝점 제외) */}
+            {!isEndPt && (
+              <circle cx={hp.x} cy={hp.y} r={6} fill="transparent"
+                style={{pointerEvents:"all"}}
+                onDoubleClick={e=>{
+                  e.stopPropagation();
+                  const newWp=waypoints.filter((_,idx)=>idx!==i-1);
+                  window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+                }}/>
+            )}
+          </g>
+        );
+      })}
+
+      {/* 라벨 + IC 배지 */}
+      {(showLabel||icNo) && (
+        <EdgeLabelRenderer>
+          <div style={{
+            position:"absolute",
+            transform:`translate(-50%,-50%) translate(${mx}px,${my}px)`,
+            display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+            pointerEvents:"none",
+          }}>
+            {showLabel&&(
+              <div style={{
+                fontSize:10,fontWeight:isSpecial?700:600,
+                background:"rgba(255,255,255,0.92)",padding:"1px 6px",
+                borderRadius:4,border:`1.5px solid ${baseColor}`,color:baseColor,
+                whiteSpace:"nowrap",boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
+              }}>{showLabel}</div>
+            )}
+            {icNo&&(
+              <div style={{
+                fontSize:9,fontWeight:700,
+                background:icStatus?icColor:"#64748B",
+                color:"#fff",padding:"0px 5px",borderRadius:3,whiteSpace:"nowrap",
+              }}>{icNo}{icStatus?` · ${icStatus}`:""}</div>
+            )}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </g>
+  );
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -1562,10 +1770,15 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     <button key={dir} onClick={()=>onAddHandle(sel.id,dir)} style={{ background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:11 }}>+ {dir}</button>
                   ))}
                 </div>
-                <div style={{ fontSize:10,color:"#94a3b8" }}>Ports: {(d.handles||["top","bottom","left","right"]).join(", ")}</div>
-              </>
-            )}
-            {/* EQUIPMENT */}
+                <div style={{ display:"flex",flexDirection:"column",gap:3,marginBottom:4 }}>
+                  {(d.handles||["top","bottom","left","right"]).map((dir,i)=>(
+                    <div key={i} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:4,padding:"2px 8px" }}>
+                      <span style={{ fontSize:11,color:"#334155" }}>Port {i+1}: {dir}</span>
+                      <button onClick={()=>{ const h=(d.handles||["top","bottom","left","right"]).filter((_,idx)=>idx!==i); onUpdateNode(sel.id,{...d,handles:h}); }}
+                        style={{ background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,padding:"0 2px" }}>×</button>
+                    </div>
+                  ))}
+                </div>
             {isNode&&sel.type==="equipment"&&(
               <>
                 <label style={L}>Item No (또는 더블클릭)</label>
@@ -1582,7 +1795,15 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     <button key={dir} onClick={()=>onAddHandle(sel.id,dir)} style={{ background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:11 }}>+ {dir}</button>
                   ))}
                 </div>
-                <div style={{ fontSize:10,color:"#94a3b8" }}>Ports: {(d.handles||[]).join(", ")}</div>
+                <div style={{ display:"flex",flexDirection:"column",gap:3,marginBottom:4 }}>
+                  {(d.handles||[]).map((dir,i)=>(
+                    <div key={i} style={{ display:"flex",alignItems:"center",justifyContent:"space-between",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:4,padding:"2px 8px" }}>
+                      <span style={{ fontSize:11,color:"#334155" }}>Port {i+1}: {dir}</span>
+                      <button onClick={()=>{ const h=(d.handles||[]).filter((_,idx)=>idx!==i); onUpdateNode(sel.id,{...d,handles:h}); }}
+                        style={{ background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:13,padding:"0 2px" }}>×</button>
+                    </div>
+                  ))}
+                </div>
               </>
             )}
             {/* INSTRUMENT */}
@@ -2102,51 +2323,52 @@ const CanvasInner = () => {
     } else if(cat==="connection"){
       if(sub==="Brench"){
         // ── Brench를 배관 위에 드롭하면 자동 분기 ──────────
-        // 드롭 위치에서 가장 가까운 엣지 찾기 (반경 20px 이내)
-        const SNAP_DIST = 30;
+        // 엣지의 실제 경로 midpoint로 근접 계산 (노드 좌표 기반보다 정확)
+        const SNAP = 60; // 픽셀 반경
         let nearEdge = null;
-        let minDist = SNAP_DIST;
+        let minDist   = SNAP;
 
-        // 현재 edges에서 가장 가까운 엣지 탐색
-        // (엣지의 source/target 노드 위치로 근사 계산)
-        const allNodes = nodes; // closure에서 현재 노드 참조
         edges.forEach(edge => {
-          const srcN = allNodes.find(n=>n.id===edge.source);
-          const tgtN = allNodes.find(n=>n.id===edge.target);
+          const srcN = nodes.find(n=>n.id===edge.source);
+          const tgtN = nodes.find(n=>n.id===edge.target);
           if(!srcN||!tgtN) return;
-          const sx=srcN.position.x, sy=srcN.position.y;
-          const tx=tgtN.position.x, ty=tgtN.position.y;
-          // 선분까지 거리 계산
-          const dx=tx-sx, dy=ty-sy;
-          const len=Math.hypot(dx,dy)||1;
-          const t=Math.max(0,Math.min(1,((pos.x-sx)*dx+(pos.y-sy)*dy)/(len*len)));
-          const cx=sx+t*dx, cy=sy+t*dy;
-          const dist=Math.hypot(pos.x-cx,pos.y-cy);
-          if(dist<minDist){ minDist=dist; nearEdge=edge; }
+          // 엣지의 orthogonal 경로 포인트들
+          const sx=srcN.position.x+(srcN.width||110)/2;
+          const sy=srcN.position.y+(srcN.height||64)/2;
+          const tx=tgtN.position.x+(tgtN.width||110)/2;
+          const ty=tgtN.position.y+(tgtN.height||64)/2;
+          const wp=edge.data?.waypoints||[];
+          const pts=[{x:sx,y:sy},...wp,{x:tx,y:ty}];
+          // 각 세그먼트까지 거리
+          for(let i=0;i<pts.length-1;i++){
+            const a=pts[i],b=pts[i+1];
+            const dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy||1;
+            const t=Math.max(0,Math.min(1,((pos.x-a.x)*dx+(pos.y-a.y)*dy)/len));
+            const d=Math.hypot(pos.x-(a.x+t*dx),pos.y-(a.y+t*dy));
+            if(d<minDist){minDist=d;nearEdge=edge;}
+          }
         });
 
         if(nearEdge){
-          // 기존 엣지 제거 후 Brench 노드 삽입 → 앞뒤 엣지 2개 생성
-          const brId = uid("br");
-          const eData = nearEdge.data || {};
-          setNodes(ns=>[...ns,{ id:brId,type:"brench",position:pos,data:{} }]);
+          const brId=uid("br");
+          const eData=nearEdge.data||{};
+          // Brench 노드 생성
+          setNodes(ns=>[...ns,{id:brId,type:"brench",position:pos,data:{}}]);
+          // 기존 엣지 제거 → source→brench / brench→target 2개 생성
           setEdges(es=>[
             ...es.filter(e=>e.id!==nearEdge.id),
-            // source → brench
-            { id:uid("e"),type:"pipe",source:nearEdge.source,target:brId,
-              sourceHandle:nearEdge.sourceHandle,targetHandle:"top",
-              data:{ ...eData, waypoints:[] } },
-            // brench → target
-            { id:uid("e"),type:"pipe",source:brId,target:nearEdge.target,
-              sourceHandle:"bottom",targetHandle:nearEdge.targetHandle,
-              data:{ ...eData, waypoints:[] } },
+            {id:uid("e"),type:"pipe",
+             source:nearEdge.source,target:brId,
+             data:{...eData,waypoints:[]}},
+            {id:uid("e"),type:"pipe",
+             source:brId,target:nearEdge.target,
+             data:{...eData,waypoints:[]}},
           ]);
         } else {
-          // 근처 배관 없으면 일반 Brench 노드 생성
-          setNodes(ns=>[...ns,{ id:uid("br"),type:"brench",position:pos,data:{} }]);
+          setNodes(ns=>[...ns,{id:uid("br"),type:"brench",position:pos,data:{}}]);
         }
       } else {
-        setNodes(ns=>[...ns,{ id:uid("br"),type:"brench",position:pos,data:{ _hint:sub } }]);
+        setNodes(ns=>[...ns,{id:uid("br"),type:"brench",position:pos,data:{_hint:sub}}]);
       }
     }
   },[screenToFlowPosition,setNodes,setEdges,edges,nodes]);
@@ -2338,12 +2560,6 @@ const CanvasInner = () => {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
-              // ── 엣지 경로 수동 조정 핸들러 ──────────────────
-              onEdgeUpdate={(oldEdge, newConnection) => {
-                setEdges(es => es.map(e => e.id === oldEdge.id ? { ...e, ...newConnection } : e));
-              }}
-              onEdgeUpdateStart={() => {}}
-              onEdgeUpdateEnd={() => {}}
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
               connectionLineType="straight"
@@ -2356,9 +2572,6 @@ const CanvasInner = () => {
               maxZoom={2}
               snapToGrid snapGrid={[10,10]}
               deleteKeyCode={null}
-              // ── 엣지 경로 수동 조정 가능 ─────────────────────
-              edgesUpdatable={true}
-              edgeUpdaterRadius={12}
               // ── 캔버스 영역 8배 확장 (±16000px) ─────────────
               translateExtent={[[-16000,-16000],[16000,16000]]}
               defaultViewport={{ x:0, y:0, zoom:0.5 }}
