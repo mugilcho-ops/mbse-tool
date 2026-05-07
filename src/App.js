@@ -786,11 +786,18 @@ const AREA_COLORS = {
   Package:  { bg:"rgba(254,249,195,0.45)", border:"#fde047", label:"#a16207" },
   Item:     { bg:"rgba(243,232,255,0.45)", border:"#d8b4fe", label:"#7e22ce" },
 };
-const EQUIPMENT_LIST = [
+// Equipment 카테고리 분리
+const EQUIPMENT_UT = [
   "Tank","Pump","Pond","Heat Exchanger","Filter","Hopper","Decanter",
   "Cooling Tower","Clarifier","Classifier","Feed Box","Chemical Dosing",
-  "Scrubber","Bag Filter","Reactor","Feed Bin","Gas Duct","Steel Structure",
+  "Gas Duct","Steel Structure",
 ];
+const EQUIPMENT_ME = [
+  "Reactor","Scrubber","Bag Filter","Feed Bin",
+  "Bucket Elev.","Compressor","Fan","Stand Pipe","Bubbler",
+  "Riser","Pnumatic Conv.","Conveyor","Machine","Structure","Hot Duct",
+];
+const EQUIPMENT_LIST = [...EQUIPMENT_UT, ...EQUIPMENT_ME];
 
 // ── Connection 타입 ──────────────────────────────────────────
 // Piping / Duct / Brench : 기존
@@ -850,6 +857,22 @@ const EQUIP_DEFAULTS = {
   "Feed Bin":       { capacity:"20 m³",       material:"MS",        designP:"1 Bar g",   designT:"50 ℃"  },
   "Gas Duct":       { capacity:"20000 Nm³/h", material:"MS",        designP:"0.5 Bar g", designT:"300 ℃" },
   "Steel Structure":{ capacity:"-",           material:"A36 Steel", designP:"-",         designT:"-"      },
+  // ME 신규 항목
+  Reactor:          { capacity:"50 m³",       material:"SS316L",    designP:"10 Bar g",  designT:"150 ℃" },
+  Scrubber:         { capacity:"10000 Nm³/h", material:"FRP",       designP:"0.5 Bar g", designT:"60 ℃"  },
+  "Bag Filter":     { capacity:"5000 Nm³/h",  material:"CS",        designP:"0.3 Bar g", designT:"180 ℃" },
+  "Feed Bin":       { capacity:"20 m³",       material:"MS",        designP:"1 Bar g",   designT:"50 ℃"  },
+  "Bucket Elev.":   { capacity:"50 t/h",      material:"MS",        designP:"-",         designT:"60 ℃"  },
+  Compressor:       { capacity:"5000 Nm³/h",  material:"CS",        designP:"10 Bar g",  designT:"80 ℃"  },
+  Fan:              { capacity:"20000 Nm³/h", material:"CS",        designP:"0.3 Bar g", designT:"200 ℃" },
+  "Stand Pipe":     { capacity:"10 m³",       material:"MS",        designP:"5 Bar g",   designT:"300 ℃" },
+  Bubbler:          { capacity:"-",           material:"MS",        designP:"2 Bar g",   designT:"200 ℃" },
+  Riser:            { capacity:"-",           material:"MS",        designP:"3 Bar g",   designT:"300 ℃" },
+  "Pnumatic Conv.": { capacity:"30 t/h",      material:"MS",        designP:"3 Bar g",   designT:"80 ℃"  },
+  Conveyor:         { capacity:"100 t/h",     material:"MS",        designP:"-",         designT:"60 ℃"  },
+  Machine:          { capacity:"-",           material:"MS",        designP:"-",         designT:"-"      },
+  Structure:        { capacity:"-",           material:"A36 Steel", designP:"-",         designT:"-"      },
+  "Hot Duct":       { capacity:"30000 Nm³/h", material:"MS",        designP:"0.3 Bar g", designT:"900 ℃" },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -880,7 +903,22 @@ const DIR_ID = { [Position.Top]:"top",[Position.Bottom]:"bottom",[Position.Left]
 
 // ─────────────────────────────────────────────────────────────
 // AREA IO UTILITY
+// Brench(분기점)는 무시하고 실제 근원지(Equipment/Instrument)를 추적
 // ─────────────────────────────────────────────────────────────
+
+// Brench를 거슬러 올라가 실제 근원 노드 찾기
+const traceSource = (nodeId, allNodes, allEdges, visited=new Set()) => {
+  if (visited.has(nodeId)) return nodeId;
+  visited.add(nodeId);
+  const node = allNodes.find(n => n.id === nodeId);
+  if (!node) return nodeId;
+  if (node.type !== "brench") return nodeId; // Equipment/Area → 여기가 진짜 근원
+  // Brench → 이 노드로 들어오는 엣지의 source를 재귀 추적
+  const inEdge = allEdges.find(e => e.target === nodeId);
+  if (!inEdge) return nodeId;
+  return traceSource(inEdge.source, allNodes, allEdges, visited);
+};
+
 const computeAreaIO = (areaNode, allNodes, allEdges) => {
   const ax=areaNode.position.x, ay=areaNode.position.y;
   const aw=areaNode.style?.width||areaNode.width||260;
@@ -893,12 +931,37 @@ const computeAreaIO = (areaNode, allNodes, allEdges) => {
   );
   if(insideIds.size===0) return { inlets:[],outlets:[] };
   const inlets=[],outlets=[];
+  const seen = new Set(); // 중복 방지
+
   allEdges.forEach(e=>{
     const si=insideIds.has(e.source),ti=insideIds.has(e.target);
-    if(si===ti) return;
-    const d=e.data||{},sub=d.fluidSub||d.lineType||"—",size=d.size?` ${d.size}`:"";
-    if(ti) inlets.push(`${sub}${size}`);
-    else   outlets.push(`${sub}${size}`);
+    if(si===ti) return; // 경계 통과 아님
+
+    const d=e.data||{};
+    const sub=d.fluidSub||d.lineType||"—";
+    const size=d.size?` ${d.size}`:"";
+    const label=`${sub}${size}`;
+
+    if(ti){
+      // 외부에서 안으로 들어옴 — source 추적 (Brench 스킵)
+      const realSrcId = traceSource(e.source, allNodes, allEdges);
+      const realSrc = allNodes.find(n=>n.id===realSrcId);
+      // Brench면 근원지 이름 대신 라인 라벨 사용
+      const srcName = (realSrc && realSrc.type!=="brench")
+        ? (realSrc.data?.itemNo||realSrc.data?.label||"외부")
+        : "외부";
+      const key = `IN:${label}:${srcName}`;
+      if(!seen.has(key)){ seen.add(key); inlets.push(label); }
+    } else {
+      // 안에서 밖으로 나감 — target 추적
+      const realTgtId = traceSource(e.target, allNodes, allEdges);
+      const realTgt = allNodes.find(n=>n.id===realTgtId);
+      const tgtName = (realTgt && realTgt.type!=="brench")
+        ? (realTgt.data?.itemNo||realTgt.data?.label||"외부")
+        : "외부";
+      const key = `OUT:${label}:${tgtName}`;
+      if(!seen.has(key)){ seen.add(key); outlets.push(label); }
+    }
   });
   return { inlets,outlets };
 };
@@ -1077,29 +1140,42 @@ const EquipmentNode = memo(({ id, data, selected }) => {
       border:`${selected?2:1.5}px solid ${selected?"#3b82f6":"#cbd5e1"}`,
       borderRadius:8,minWidth:110,minHeight:64,
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-      padding:"8px 12px",fontSize:11,cursor:"default",
+      padding:"6px 12px 8px",fontSize:11,cursor:"default",
       position:"relative",userSelect:"none",boxSizing:"border-box",
     }}>
       <NodeResizer minWidth={80} minHeight={50} isVisible={selected} handleStyle={{ width:8,height:8 }}/>
       {handleList.map(({dir,pid,pct})=>(
         <Handle key={pid} type="source" position={posMap[dir]} id={pid} style={getStyle(dir,pct)}/>
       ))}
-      <div style={{ color:"#3b82f6",marginBottom:4 }}><EquipSVG type={data.equipType} size={26}/></div>
+
+      {/* ── Item No: 상단 표시 ── */}
       {editing ? (
         <input ref={inputRef} className="mbse-label-input" value={draft}
           onChange={e=>setDraft(e.target.value)} onBlur={commitEdit}
           onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
-          onClick={e=>e.stopPropagation()} placeholder="Item No"/>
+          onClick={e=>e.stopPropagation()} placeholder="Item No"
+          style={{ marginBottom:4 }}/>
       ) : (
         <div onDoubleClick={startEdit}
-          style={{ fontWeight:700,color:"#0f172a",fontSize:11,textAlign:"center",lineHeight:1.3,cursor:"text",padding:"1px 4px",borderRadius:3,minWidth:60 }}
+          style={{ fontWeight:700,color:"#1d4ed8",fontSize:10,textAlign:"center",
+                   lineHeight:1.2,cursor:"text",padding:"1px 4px",borderRadius:3,
+                   minWidth:60,marginBottom:3,
+                   background: data.itemNo?"rgba(29,78,216,0.06)":"transparent",
+                   border: data.itemNo?"1px dashed #bfdbfe":"1px dashed transparent" }}
           title="더블클릭으로 Item No 편집">
-          {displayName}
+          {data.itemNo || <span style={{ color:"#cbd5e1",fontSize:9 }}>Item No</span>}
         </div>
       )}
-      {data.label && data.label!==displayName && (
-        <div style={{ color:"#64748b",fontSize:10,textAlign:"center" }}>{data.label}</div>
-      )}
+
+      {/* ── 아이콘 ── */}
+      <div style={{ color:"#3b82f6",marginBottom:3 }}><EquipSVG type={data.equipType} size={24}/></div>
+
+      {/* ── 설비명 ── */}
+      <div style={{ fontWeight:600,color:"#475569",fontSize:10,textAlign:"center",lineHeight:1.2 }}>
+        {data.label && data.label!==(data.itemNo||data.equipType)
+          ? data.label
+          : data.equipType}
+      </div>
     </div>
   );
 });
@@ -1134,13 +1210,210 @@ const InstrumentNode = memo(({ data, selected }) => (
 
 // ─────────────────────────────────────────────────────────────
 // PIPE EDGE
-// Process Gas / Material: 굵은 선 + 중앙 텍스트 라벨 (인라인 편집 포함)
 // ─────────────────────────────────────────────────────────────
+// ORTHOGONAL PATH BUILDER
+// waypoints 기반 직각 꺾임 경로 생성 (Excel/PPT 꺾인선 방식)
 // ─────────────────────────────────────────────────────────────
-// PIPE EDGE — waypoint 경유점 드래그로 Route 수정 가능
-// 선택 시 중간점(○)이 나타나고 드래그하면 경로가 꺾임
+const buildOrthogonalPath = (sx, sy, tx, ty, waypoints=[]) => {
+  if (waypoints.length === 0) {
+    // 자동 직각: 수평 → 수직
+    const mx = (sx + tx) / 2;
+    return `M${sx},${sy} L${mx},${sy} L${mx},${ty} L${tx},${ty}`;
+  }
+  const pts = [{x:sx,y:sy}, ...waypoints, {x:tx,y:ty}];
+  return pts.map((p,i) => (i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`)).join(" ");
+};
+
+// ─────────────────────────────────────────────────────────────
+// PIPE EDGE — 직각 꺾임 + 핸들 드래그 Route 수정
 // ─────────────────────────────────────────────────────────────
 const PipeEdge = ({
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition, data, selected,
+}) => {
+  const lt        = data?.lineType || "Piping";
+  const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
+  const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
+  const stroke    = selected ? "#f59e0b" : baseColor;
+  const sw        = ls.sw;
+  const mkId      = `mk_${id}`;
+
+  const icStatusColor = { "OPEN":"#CA8A04","IN PROGRESS":"#2563EB","CLOSED":"#16A34A","OVERDUE":"#DC2626" };
+  const fluidLabel  = data?.fluidSub || "";
+  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size||"");
+  const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
+  const isSpecial   = lt==="Process Gas"||lt==="Material";
+  const labelText   = data?.lineText||(isSpecial?lt:null);
+  const showLabel   = isSpecial?labelText:pipingLabel;
+  const icNo        = data?.ic_no     || "";
+  const icStatus    = data?.ic_status || "";
+  const icColor     = icStatusColor[icStatus] || "#64748B";
+
+  const waypoints = data?.waypoints || [];
+
+  // 경로 생성
+  const edgePath = buildOrthogonalPath(sourceX, sourceY, targetX, targetY, waypoints);
+
+  // 라벨 위치: 중간 세그먼트
+  const allPts = [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+  const midIdx = Math.floor((allPts.length-1)/2);
+  const mx = (allPts[midIdx].x + allPts[midIdx+1 < allPts.length ? midIdx+1 : midIdx].x)/2;
+  const my = (allPts[midIdx].y + allPts[midIdx+1 < allPts.length ? midIdx+1 : midIdx].y)/2;
+
+  // 경유점 드래그 (직각 제약: 세그먼트 방향에 따라 x 또는 y만 이동)
+  const onWaypointDrag = useCallback((e, wpIdx) => {
+    e.stopPropagation();
+    const svg = e.target.closest("svg");
+    if (!svg) return;
+    const getPos = ev => {
+      const pt = svg.createSVGPoint();
+      pt.x=ev.clientX; pt.y=ev.clientY;
+      return pt.matrixTransform(svg.getScreenCTM().inverse());
+    };
+    const startPos = getPos(e);
+    const origWp   = {...waypoints[wpIdx]};
+    const prevPt   = wpIdx===0 ? {x:sourceX,y:sourceY} : waypoints[wpIdx-1];
+    const nextPt   = wpIdx===waypoints.length-1 ? {x:targetX,y:targetY} : waypoints[wpIdx+1];
+    // 세그먼트 방향 판별: 수평 세그먼트 핸들은 y만, 수직은 x만 이동
+    const isHoriz  = Math.abs(prevPt.y - origWp.y) < 5;
+
+    const onMove = mv => {
+      const pos = getPos(mv);
+      const dx = pos.x - startPos.x;
+      const dy = pos.y - startPos.y;
+      const newWp = [...waypoints];
+      if (isHoriz) {
+        newWp[wpIdx] = { x:origWp.x, y:origWp.y+dy };
+        // 인접 경유점도 같은 y로 맞춤
+        if (wpIdx>0 && Math.abs(waypoints[wpIdx-1].y-origWp.y)<5)
+          newWp[wpIdx-1]={...newWp[wpIdx-1], y:origWp.y+dy};
+        if (wpIdx<waypoints.length-1 && Math.abs(waypoints[wpIdx+1].y-origWp.y)<5)
+          newWp[wpIdx+1]={...newWp[wpIdx+1], y:origWp.y+dy};
+      } else {
+        newWp[wpIdx] = { x:origWp.x+dx, y:origWp.y };
+        if (wpIdx>0 && Math.abs(waypoints[wpIdx-1].x-origWp.x)<5)
+          newWp[wpIdx-1]={...newWp[wpIdx-1], x:origWp.x+dx};
+        if (wpIdx<waypoints.length-1 && Math.abs(waypoints[wpIdx+1].x-origWp.x)<5)
+          newWp[wpIdx+1]={...newWp[wpIdx+1], x:origWp.x+dx};
+      }
+      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+    };
+    const onUp = ()=>{ window.removeEventListener("mousemove",onMove); window.removeEventListener("mouseup",onUp); };
+    window.addEventListener("mousemove",onMove);
+    window.addEventListener("mouseup",onUp);
+  },[id,waypoints,sourceX,sourceY,targetX,targetY]);
+
+  // 선 세그먼트 클릭 → 경유점 삽입
+  const onSegmentClick = useCallback(e=>{
+    if (!selected) return;
+    e.stopPropagation();
+    const svg = e.target.closest("svg");
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x=e.clientX; pt.y=e.clientY;
+    const pos = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const pts = [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+    // 직각 경로상 세그먼트에 삽입: 해당 세그먼트의 방향 따라 수직/수평 경유점 한 쌍 삽입
+    let minDist=Infinity, insertIdx=0;
+    for(let i=0;i<pts.length-1;i++){
+      const a=pts[i],b=pts[i+1];
+      const dx=b.x-a.x, dy=b.y-a.y;
+      const t=Math.max(0,Math.min(1,((pos.x-a.x)*dx+(pos.y-a.y)*dy)/(dx*dx+dy*dy||1)));
+      const cx=a.x+t*dx, cy=a.y+t*dy;
+      const dist=Math.hypot(pos.x-cx,pos.y-cy);
+      if(dist<minDist){ minDist=dist; insertIdx=i; }
+    }
+    // 클릭한 세그먼트가 수평이면 수평 핸들(y만 변경), 수직이면 수직 핸들
+    const a=pts[insertIdx], b=pts[insertIdx+1];
+    const isH = Math.abs(a.y-b.y)<5; // 수평 세그먼트
+    const newWp = [...waypoints];
+    if(isH){
+      newWp.splice(insertIdx, 0, {x:pos.x, y:a.y});
+    } else {
+      newWp.splice(insertIdx, 0, {x:a.x, y:pos.y});
+    }
+    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+  },[id,selected,waypoints,sourceX,sourceY,targetX,targetY]);
+
+  return (
+    <g>
+      <defs>
+        <marker id={mkId} markerWidth="5" markerHeight="4" refX="4.5" refY="2"
+          orient="auto" markerUnits="strokeWidth">
+          <polygon points="0 0, 5 2, 0 4" fill={stroke}/>
+        </marker>
+      </defs>
+
+      {/* 넓은 hit area */}
+      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16}
+        style={{ cursor: selected?"crosshair":"pointer" }}
+        onClick={onSegmentClick}/>
+
+      {/* 실제 라인 */}
+      <path d={edgePath} fill="none" stroke={stroke}
+        strokeWidth={selected?sw+0.5:sw}
+        strokeDasharray={ls.dash}
+        markerEnd={`url(#${mkId})`}
+        style={{ pointerEvents:"none" }}/>
+
+      {/* 선택 시 경유점 핸들 (사각형 = PPT/Excel 스타일) */}
+      {selected && waypoints.map((wp,i)=>(
+        <g key={i}>
+          <rect x={wp.x-6} y={wp.y-6} width={12} height={12}
+            fill="white" stroke="#f59e0b" strokeWidth={1.5} rx={2}
+            style={{ cursor:"move" }}
+            onMouseDown={e=>onWaypointDrag(e,i)}/>
+          <rect x={wp.x-6} y={wp.y-6} width={12} height={12}
+            fill="transparent"
+            onDoubleClick={e=>{
+              e.stopPropagation();
+              const newWp=waypoints.filter((_,idx)=>idx!==i);
+              window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+            }}/>
+        </g>
+      ))}
+
+      {/* 선택 시 세그먼트 중간에 + 핸들 힌트 */}
+      {selected && waypoints.length===0 && (
+        <g>
+          <circle cx={mx} cy={my} r={6} fill="white" stroke="#f59e0b" strokeWidth={1.5}
+            style={{ cursor:"pointer" }} onClick={onSegmentClick}/>
+          <text x={mx} y={my+1} textAnchor="middle" dominantBaseline="central"
+            fontSize="10" fill="#f59e0b" style={{ pointerEvents:"none" }}>+</text>
+        </g>
+      )}
+
+      {/* 라벨 + IC 배지 */}
+      {(showLabel||icNo) && (
+        <EdgeLabelRenderer>
+          <div style={{
+            position:"absolute",
+            transform:`translate(-50%,-50%) translate(${mx}px,${my}px)`,
+            display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+            pointerEvents:"none",
+          }}>
+            {showLabel && (
+              <div style={{
+                fontSize:10,fontWeight:isSpecial?700:600,
+                background:"rgba(255,255,255,0.92)",
+                padding:"1px 6px",borderRadius:4,
+                border:`1.5px solid ${baseColor}`,color:baseColor,
+                whiteSpace:"nowrap",boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
+              }}>{showLabel}</div>
+            )}
+            {icNo && (
+              <div style={{
+                fontSize:9,fontWeight:700,
+                background:icStatus?icColor:"#64748B",
+                color:"#fff",padding:"0px 5px",borderRadius:3,whiteSpace:"nowrap",
+              }}>{icNo}{icStatus?` · ${icStatus}`:""}</div>
+            )}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </g>
+  );
+};
   id, sourceX, sourceY, targetX, targetY,
   sourcePosition, targetPosition, data, selected,
 }) => {
@@ -1343,7 +1616,7 @@ const edgeTypes = { pipe:PipeEdge };
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────
 const Sidebar = memo(({ onDragStart }) => {
-  const [open,setOpen]=useState({ Area:true,Equipment:true,Connection:false,Instrument:false });
+  const [open,setOpen]=useState({ Area:true,EquipUT:true,EquipME:false,Connection:false,Instrument:false });
   const tog=k=>setOpen(p=>({...p,[k]:!p[k]}));
   const iS=(color="#475569")=>({ padding:"5px 14px 5px 20px",cursor:"grab",borderBottom:"1px solid #f1f5f9",color,fontSize:11,userSelect:"none",display:"flex",alignItems:"center",gap:6 });
   const hov={ onMouseEnter:e=>{e.currentTarget.style.background="#e0f2fe";},onMouseLeave:e=>{e.currentTarget.style.background="";} };
@@ -1370,9 +1643,14 @@ const Sidebar = memo(({ onDragStart }) => {
           <div key={at} draggable onDragStart={e=>onDragStart(e,"area",at)} style={{ ...iS(c?.label||"#1d4ed8"),background:c?.bg||"transparent" }} {...hov}>▭ {at}</div>
         );})}
       </Sec>
-      <Sec title="Equipment" cat="Equipment">
-        {EQUIPMENT_LIST.map(eq=>(
+      <Sec title="Equipment (UT)" cat="EquipUT">
+        {EQUIPMENT_UT.map(eq=>(
           <div key={eq} draggable onDragStart={e=>onDragStart(e,"equipment",eq)} style={iS()} {...hov}><EquipSVG type={eq} size={14}/>{eq}</div>
+        ))}
+      </Sec>
+      <Sec title="Equipment (ME)" cat="EquipME">
+        {EQUIPMENT_ME.map(eq=>(
+          <div key={eq} draggable onDragStart={e=>onDragStart(e,"equipment",eq)} style={iS("#7c3aed")} {...hov}><EquipSVG type={eq} size={14}/>{eq}</div>
         ))}
       </Sec>
       <Sec title="Connection" cat="Connection">
@@ -2013,15 +2291,56 @@ const CanvasInner = () => {
       setNodes(ns=>[...ns,{ id:uid("ins"),type:"instrument",position:pos,
         data:{ instrCategory:ic,instrType:it,itemNo:"",requirements:[] } }]);
     } else if(cat==="connection"){
-      // Brench/Process Gas/Material 드롭 → 분기점 노드 생성
-      if(sub==="Piping"||sub==="Duct"||sub==="Conveyor"){
-        // Piping/Duct는 핸들 드래그로 연결 — 드롭 시 Brench 생성
-        setNodes(ns=>[...ns,{ id:uid("br"),type:"brench",position:pos,data:{ _hint:sub } }]);
+      if(sub==="Brench"){
+        // ── Brench를 배관 위에 드롭하면 자동 분기 ──────────
+        // 드롭 위치에서 가장 가까운 엣지 찾기 (반경 20px 이내)
+        const SNAP_DIST = 30;
+        let nearEdge = null;
+        let minDist = SNAP_DIST;
+
+        // 현재 edges에서 가장 가까운 엣지 탐색
+        // (엣지의 source/target 노드 위치로 근사 계산)
+        const allNodes = nodes; // closure에서 현재 노드 참조
+        edges.forEach(edge => {
+          const srcN = allNodes.find(n=>n.id===edge.source);
+          const tgtN = allNodes.find(n=>n.id===edge.target);
+          if(!srcN||!tgtN) return;
+          const sx=srcN.position.x, sy=srcN.position.y;
+          const tx=tgtN.position.x, ty=tgtN.position.y;
+          // 선분까지 거리 계산
+          const dx=tx-sx, dy=ty-sy;
+          const len=Math.hypot(dx,dy)||1;
+          const t=Math.max(0,Math.min(1,((pos.x-sx)*dx+(pos.y-sy)*dy)/(len*len)));
+          const cx=sx+t*dx, cy=sy+t*dy;
+          const dist=Math.hypot(pos.x-cx,pos.y-cy);
+          if(dist<minDist){ minDist=dist; nearEdge=edge; }
+        });
+
+        if(nearEdge){
+          // 기존 엣지 제거 후 Brench 노드 삽입 → 앞뒤 엣지 2개 생성
+          const brId = uid("br");
+          const eData = nearEdge.data || {};
+          setNodes(ns=>[...ns,{ id:brId,type:"brench",position:pos,data:{} }]);
+          setEdges(es=>[
+            ...es.filter(e=>e.id!==nearEdge.id),
+            // source → brench
+            { id:uid("e"),type:"pipe",source:nearEdge.source,target:brId,
+              sourceHandle:nearEdge.sourceHandle,targetHandle:"top",
+              data:{ ...eData, waypoints:[] } },
+            // brench → target
+            { id:uid("e"),type:"pipe",source:brId,target:nearEdge.target,
+              sourceHandle:"bottom",targetHandle:nearEdge.targetHandle,
+              data:{ ...eData, waypoints:[] } },
+          ]);
+        } else {
+          // 근처 배관 없으면 일반 Brench 노드 생성
+          setNodes(ns=>[...ns,{ id:uid("br"),type:"brench",position:pos,data:{} }]);
+        }
       } else {
         setNodes(ns=>[...ns,{ id:uid("br"),type:"brench",position:pos,data:{ _hint:sub } }]);
       }
     }
-  },[screenToFlowPosition,setNodes]);
+  },[screenToFlowPosition,setNodes,setEdges,edges,nodes]);
 
   // CONNECT — 드래그 힌트 lineType 감지
   const onConnect=useCallback(params=>{
@@ -2218,7 +2537,7 @@ const CanvasInner = () => {
               onEdgeUpdateEnd={() => {}}
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
-              connectionLineType="smoothstep"
+              connectionLineType="straight"
               connectionLineStyle={{ stroke:"#3b82f6",strokeWidth:2 }}
               defaultEdgeOptions={{ type:"pipe" }}
               // ── fitView: 전체 노드가 화면에 맞게 보임 ─────────
