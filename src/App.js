@@ -1587,6 +1587,9 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     </div>
                   ))}
                 </div>
+              </>
+            )}
+            {/* EQUIPMENT */}
             {isNode&&sel.type==="equipment"&&(
               <>
                 <label style={L}>Item No (또는 더블클릭)</label>
