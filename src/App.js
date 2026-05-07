@@ -600,12 +600,30 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         let updatedEdges = [...edges];
         const log = [];
 
+        // ── 헬퍼: 스타일 적용 시트의 헤더 행 자동 감지 ───────
+        // Export 시 타이틀(1)+프로젝트정보(1)+범례(1)+헤더(1) = 3행 스킵
+        // "Edge ID" 또는 "Node ID" 컬럼이 있는 첫 행을 헤더로 사용
+        const readSheet = (ws, keyCol) => {
+          if (!ws) return [];
+          // 먼저 raw로 읽어서 헤더 행 위치 찾기
+          const raw = XLSX.utils.sheet_to_json(ws, { header:1 });
+          let headerRow = 0;
+          for (let i = 0; i < Math.min(raw.length, 10); i++) {
+            if (raw[i] && raw[i].includes(keyCol)) {
+              headerRow = i;
+              break;
+            }
+          }
+          // 헤더 행부터 파싱
+          return XLSX.utils.sheet_to_json(ws, { range: headerRow });
+        };
+
         // ── IC Register 시트 → Edge 업데이트 ─────────────
         const wsIC = wb.Sheets["IC Register"];
         if (wsIC) {
-          const rows = XLSX.utils.sheet_to_json(wsIC);
+          const rows = readSheet(wsIC, "Edge ID");
           rows.forEach(row => {
-            const edgeId = row["Edge ID"];
+            const edgeId = String(row["Edge ID"]||"").trim();
             if (!edgeId) return;
             const idx = updatedEdges.findIndex(e => e.id === edgeId);
             if (idx === -1) return;
@@ -614,23 +632,18 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               ...e,
               data: {
                 ...e.data,
-                // IC Register에서 수정한 내용을 다시 반영
-                serialNo:    row["Line No."]       !== undefined
-                               ? String(row["Line No."]||"")     : e.data?.serialNo,
-                spec:        row["Schedule"]        !== undefined
-                               ? String(row["Schedule"]||"")     : e.data?.spec,
-                lineText:    row["Line Text"]       !== undefined
-                               ? String(row["Line Text"]||"")    : e.data?.lineText,
-                // IC 관리 데이터 (엣지에 저장)
-                ic_no:       row["IC No."]          ? String(row["IC No."])          : e.data?.ic_no,
-                ic_status:   row["상태"]             ? String(row["상태"])             : e.data?.ic_status,
-                ic_priority: row["우선순위"]          ? String(row["우선순위"])          : e.data?.ic_priority,
-                ic_due:      row["목표 완료일"]       ? String(row["목표 완료일"]||"")  : e.data?.ic_due,
-                ic_closed:   row["실제 완료일"]       ? String(row["실제 완료일"]||"")  : e.data?.ic_closed,
-                ic_resp_from:row["담당자 (From)"]    ? String(row["담당자 (From)"]||""): e.data?.ic_resp_from,
-                ic_resp_to:  row["담당자 (To)"]      ? String(row["담당자 (To)"]||"")  : e.data?.ic_resp_to,
-                ic_remark:   row["비고"]             ? String(row["비고"]||"")         : e.data?.ic_remark,
-                icd_no:      row["ICD 번호"]         ? String(row["ICD 번호"]||"")     : e.data?.icd_no,
+                serialNo:    row["Line No."]      != null ? String(row["Line No."]||"")      : e.data?.serialNo,
+                spec:        row["Schedule"]       != null ? String(row["Schedule"]||"")      : e.data?.spec,
+                lineText:    row["Line Text"]      != null ? String(row["Line Text"]||"")     : e.data?.lineText,
+                ic_no:       row["IC No."]         != null ? String(row["IC No."]||"")        : e.data?.ic_no,
+                ic_status:   row["상태"]            != null ? String(row["상태"]||"")           : e.data?.ic_status,
+                ic_priority: row["우선순위"]         != null ? String(row["우선순위"]||"")       : e.data?.ic_priority,
+                ic_due:      row["목표 완료일"]      != null ? String(row["목표 완료일"]||"")    : e.data?.ic_due,
+                ic_closed:   row["실제 완료일"]      != null ? String(row["실제 완료일"]||"")    : e.data?.ic_closed,
+                ic_resp_from:row["담당자 (From)"]   != null ? String(row["담당자 (From)"]||"")  : e.data?.ic_resp_from,
+                ic_resp_to:  row["담당자 (To)"]     != null ? String(row["담당자 (To)"]||"")    : e.data?.ic_resp_to,
+                ic_remark:   row["비고"]            != null ? String(row["비고"]||"")           : e.data?.ic_remark,
+                icd_no:      row["ICD 번호"]        != null ? String(row["ICD 번호"]||"")       : e.data?.icd_no,
               }
             };
             log.push(`IC ${row["IC No."]} → Edge ${edgeId} 업데이트`);
@@ -640,9 +653,9 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Equipment List 시트 → Node 업데이트 ──────────
         const wsEq = wb.Sheets["Equipment List"];
         if (wsEq) {
-          const rows = XLSX.utils.sheet_to_json(wsEq);
+          const rows = readSheet(wsEq, "Node ID");
           rows.forEach(row => {
-            const nodeId = row["Node ID"];
+            const nodeId = String(row["Node ID"]||"").trim();
             if (!nodeId) return;
             const idx = updatedNodes.findIndex(n => n.id === nodeId);
             if (idx === -1) return;
@@ -651,13 +664,13 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               ...n,
               data: {
                 ...n.data,
-                itemNo:   row["Item No."] !== undefined ? String(row["Item No."]||"")  : n.data.itemNo,
-                label:    row["설비명"]    !== undefined ? String(row["설비명"]||"")     : n.data.label,
-                material: row["재질"]      !== undefined ? String(row["재질"]||"")      : n.data.material,
-                capacity: row["용량"]      !== undefined ? String(row["용량"]||"")      : n.data.capacity,
-                designP:  row["설계 압력"] !== undefined ? String(row["설계 압력"]||"") : n.data.designP,
-                designT:  row["설계 온도"] !== undefined ? String(row["설계 온도"]||"") : n.data.designT,
-                summary:  row["비고"]      !== undefined ? String(row["비고"]||"")      : n.data.summary,
+                itemNo:   row["Item No."] != null ? String(row["Item No."]||"")  : n.data.itemNo,
+                label:    row["설비명"]    != null ? String(row["설비명"]||"")     : n.data.label,
+                material: row["재질"]      != null ? String(row["재질"]||"")      : n.data.material,
+                capacity: row["용량"]      != null ? String(row["용량"]||"")      : n.data.capacity,
+                designP:  row["설계 압력"] != null ? String(row["설계 압력"]||"") : n.data.designP,
+                designT:  row["설계 온도"] != null ? String(row["설계 온도"]||"") : n.data.designT,
+                summary:  row["비고"]      != null ? String(row["비고"]||"")      : n.data.summary,
               }
             };
             log.push(`Equipment ${row["Item No."]} → Node ${nodeId} 업데이트`);
@@ -667,27 +680,27 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Connection List 시트 → Edge 기본 속성 ────────
         const wsConn = wb.Sheets["Connection List"];
         if (wsConn) {
-          const rows = XLSX.utils.sheet_to_json(wsConn);
+          const rows = readSheet(wsConn, "Edge ID");
           rows.forEach(row => {
-            const edgeId = row["Edge ID"];
+            const edgeId = String(row["Edge ID"]||"").trim();
             if (!edgeId) return;
             const idx = updatedEdges.findIndex(e => e.id === edgeId);
             if (idx === -1) return;
             const e = updatedEdges[idx];
-            const sizeRaw = row["Size"] ? String(row["Size"]||"") : "";
+            const sizeRaw = row["Size"] != null ? String(row["Size"]||"") : "";
             const sizeNum = sizeRaw.replace(/[^0-9]/g,"");
             updatedEdges[idx] = {
               ...e,
               data: {
                 ...e.data,
-                serialNo:     row["Line No."]       ? String(row["Line No."]||"")    : e.data?.serialNo,
-                lineType:     row["Line Type"]       ? String(row["Line Type"]||"")  : e.data?.lineType,
-                fluidPrimary: row["Fluid (Primary)"] ? String(row["Fluid (Primary)"]||"") : e.data?.fluidPrimary,
-                fluidSub:     row["Fluid (Sub)"]     ? String(row["Fluid (Sub)"]||"")     : e.data?.fluidSub,
+                serialNo:     row["Line No."]       != null ? String(row["Line No."]||"")    : e.data?.serialNo,
+                lineType:     row["Line Type"]       != null ? String(row["Line Type"]||"")  : e.data?.lineType,
+                fluidPrimary: row["Fluid (Primary)"] != null ? String(row["Fluid (Primary)"]||"") : e.data?.fluidPrimary,
+                fluidSub:     row["Fluid (Sub)"]     != null ? String(row["Fluid (Sub)"]||"")     : e.data?.fluidSub,
                 size:         sizeRaw,
                 sizeNum:      sizeNum,
-                spec:         row["Schedule"]        ? String(row["Schedule"]||"")   : e.data?.spec,
-                lineText:     row["Line Text"]       ? String(row["Line Text"]||"")  : e.data?.lineText,
+                spec:         row["Schedule"]        != null ? String(row["Schedule"]||"")   : e.data?.spec,
+                lineText:     row["Line Text"]       != null ? String(row["Line Text"]||"")  : e.data?.lineText,
               }
             };
           });
@@ -696,12 +709,13 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Requirements 시트 ─────────────────────────────
         const wsR = wb.Sheets["Requirements"];
         if (wsR) {
-          const rows = XLSX.utils.sheet_to_json(wsR);
+          const rows = readSheet(wsR, "Node ID");
           const reqMap = {};
           rows.forEach(r => {
-            if (!r["Node ID"] || !r["요구사항"]) return;
-            if (!reqMap[r["Node ID"]]) reqMap[r["Node ID"]] = [];
-            reqMap[r["Node ID"]].push({
+            const nodeId = String(r["Node ID"]||"").trim();
+            if (!nodeId || !r["요구사항"]) return;
+            if (!reqMap[nodeId]) reqMap[nodeId] = [];
+            reqMap[nodeId].push({
               id:   Date.now() + Math.random(),
               text: String(r["요구사항"]   || ""),
               who:  String(r["Stakeholder"]|| ""),
@@ -1122,61 +1136,168 @@ const InstrumentNode = memo(({ data, selected }) => (
 // PIPE EDGE
 // Process Gas / Material: 굵은 선 + 중앙 텍스트 라벨 (인라인 편집 포함)
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// PIPE EDGE — waypoint 경유점 드래그로 Route 수정 가능
+// 선택 시 중간점(○)이 나타나고 드래그하면 경로가 꺾임
+// ─────────────────────────────────────────────────────────────
 const PipeEdge = ({
-  id,sourceX,sourceY,targetX,targetY,
-  sourcePosition,targetPosition,data,selected,
+  id, sourceX, sourceY, targetX, targetY,
+  sourcePosition, targetPosition, data, selected,
 }) => {
-  const [edgePath] = getSmoothStepPath({ sourceX,sourceY,sourcePosition,targetX,targetY,targetPosition,borderRadius:4 });
-
-  const lt = data?.lineType || "Piping";
-  const ls = LINE_STYLE[lt] || LINE_STYLE.Piping;
-
-  // Fluid 색상 우선, 없으면 lineType 기본색
+  const lt       = data?.lineType || "Piping";
+  const ls       = LINE_STYLE[lt] || LINE_STYLE.Piping;
   const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
   const stroke    = selected ? "#f59e0b" : baseColor;
   const sw        = ls.sw;
   const mkId      = `mk_${id}`;
 
-  // IC 상태 색상
-  const icStatusColor = {
-    "OPEN":        "#CA8A04",
-    "IN PROGRESS": "#2563EB",
-    "CLOSED":      "#16A34A",
-    "OVERDUE":     "#DC2626",
-  };
-
-  // 라인 라벨: Fluid-SizeA 형식
-  const fluidLabel = data?.fluidSub || "";
-  const sizeLabel  = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
-  const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
-  const isSpecial = lt==="Process Gas" || lt==="Material";
-  const labelText = data?.lineText || (isSpecial ? lt : null);
-  const showLabel = isSpecial ? labelText : pipingLabel;
-
   // IC 정보
-  const icNo     = data?.ic_no     || "";
-  const icStatus = data?.ic_status || "";
-  const icColor  = icStatusColor[icStatus] || "#64748B";
+  const icStatusColor = { "OPEN":"#CA8A04","IN PROGRESS":"#2563EB","CLOSED":"#16A34A","OVERDUE":"#DC2626" };
+  const fluidLabel  = data?.fluidSub || "";
+  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
+  const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
+  const isSpecial   = lt==="Process Gas" || lt==="Material";
+  const labelText   = data?.lineText || (isSpecial ? lt : null);
+  const showLabel   = isSpecial ? labelText : pipingLabel;
+  const icNo        = data?.ic_no     || "";
+  const icStatus    = data?.ic_status || "";
+  const icColor     = icStatusColor[icStatus] || "#64748B";
 
-  const mx = (sourceX+targetX)/2;
-  const my = (sourceY+targetY)/2;
+  // waypoints: [{x,y}, ...] — 경유점 목록 (data.waypoints에 저장)
+  const waypoints = data?.waypoints || [];
+
+  // 경로 계산: 경유점이 있으면 polyline, 없으면 smoothstep
+  let edgePath;
+  if (waypoints.length > 0) {
+    // 경유점 포함 직각 꺾임 경로
+    const pts = [
+      { x: sourceX, y: sourceY },
+      ...waypoints,
+      { x: targetX, y: targetY },
+    ];
+    const segments = pts.map((p,i) => i===0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`);
+    edgePath = segments.join(" ");
+  } else {
+    [edgePath] = getSmoothStepPath({
+      sourceX, sourceY, sourcePosition,
+      targetX, targetY, targetPosition, borderRadius:4,
+    });
+  }
+
+  const mx = waypoints.length > 0
+    ? (waypoints[Math.floor((waypoints.length-1)/2)].x + waypoints[Math.floor(waypoints.length/2)].x) / 2
+    : (sourceX+targetX)/2;
+  const my = waypoints.length > 0
+    ? (waypoints[Math.floor((waypoints.length-1)/2)].y + waypoints[Math.floor(waypoints.length/2)].y) / 2
+    : (sourceY+targetY)/2;
+
+  // 경유점 드래그 핸들러 (ReactFlow SVG 내에서 직접 drag)
+  const onWaypointMouseDown = useCallback((e, wpIdx) => {
+    e.stopPropagation();
+    const svg = e.target.closest("svg");
+    if (!svg) return;
+    const getPos = (ev) => {
+      const pt = svg.createSVGPoint();
+      pt.x = ev.clientX; pt.y = ev.clientY;
+      const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+      return { x: svgP.x, y: svgP.y };
+    };
+    const onMove = (mv) => {
+      const pos = getPos(mv);
+      const newWp = [...waypoints];
+      newWp[wpIdx] = pos;
+      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+        { detail:{ id, waypoints: newWp } }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
+  }, [id, waypoints]);
+
+  // 선 클릭으로 경유점 추가 (선택 상태에서만)
+  const onPathClick = useCallback((e) => {
+    if (!selected) return;
+    e.stopPropagation();
+    const svg = e.target.closest("svg");
+    if (!svg) return;
+    const pt = svg.createSVGPoint();
+    pt.x = e.clientX; pt.y = e.clientY;
+    const pos = pt.matrixTransform(svg.getScreenCTM().inverse());
+    // 클릭 위치에 가장 가까운 선분에 삽입
+    const pts = [{ x:sourceX,y:sourceY }, ...waypoints, { x:targetX,y:targetY }];
+    let minDist = Infinity, insertIdx = waypoints.length;
+    for (let i=0; i<pts.length-1; i++) {
+      const a=pts[i], b=pts[i+1];
+      const dx=b.x-a.x, dy=b.y-a.y;
+      const t = Math.max(0, Math.min(1, ((pos.x-a.x)*dx+(pos.y-a.y)*dy)/(dx*dx+dy*dy||1)));
+      const cx=a.x+t*dx, cy=a.y+t*dy;
+      const dist = Math.hypot(pos.x-cx, pos.y-cy);
+      if (dist < minDist) { minDist=dist; insertIdx=i; }
+    }
+    const newWp = [...waypoints];
+    newWp.splice(insertIdx, 0, { x:pos.x, y:pos.y });
+    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+      { detail:{ id, waypoints: newWp } }));
+  }, [id, selected, waypoints, sourceX, sourceY, targetX, targetY]);
 
   return (
     <g>
       <defs>
-        <marker id={mkId} markerWidth="5" markerHeight="4" refX="4.5" refY="2" orient="auto" markerUnits="strokeWidth">
+        <marker id={mkId} markerWidth="5" markerHeight="4" refX="4.5" refY="2"
+          orient="auto" markerUnits="strokeWidth">
           <polygon points="0 0, 5 2, 0 4" fill={stroke}/>
         </marker>
       </defs>
-      {/* hit area */}
-      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16} style={{ cursor:"pointer" }}/>
-      {/* visible line */}
+
+      {/* 넓은 hit area */}
+      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16}
+        style={{ cursor: selected ? "crosshair" : "pointer" }}
+        onClick={onPathClick}/>
+
+      {/* 실제 라인 */}
       <path d={edgePath} fill="none" stroke={stroke}
         strokeWidth={selected?sw+0.5:sw}
         strokeDasharray={ls.dash}
         markerEnd={`url(#${mkId})`}
         style={{ pointerEvents:"none" }}/>
-      {/* 라인 라벨 + IC 상태 배지 */}
+
+      {/* 선택 시 경유점 핸들 표시 */}
+      {selected && waypoints.map((wp, i) => (
+        <g key={i}>
+          <circle cx={wp.x} cy={wp.y} r={7} fill="white"
+            stroke="#f59e0b" strokeWidth={1.5}
+            style={{ cursor:"move" }}
+            onMouseDown={(e) => onWaypointMouseDown(e, i)}/>
+          {/* 더블클릭으로 경유점 삭제 */}
+          <circle cx={wp.x} cy={wp.y} r={7} fill="transparent"
+            onDoubleClick={(e) => {
+              e.stopPropagation();
+              const newWp = waypoints.filter((_,idx)=>idx!==i);
+              window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+                { detail:{ id, waypoints: newWp } }));
+            }}/>
+        </g>
+      ))}
+
+      {/* 선택 시 힌트 */}
+      {selected && waypoints.length===0 && (
+        <EdgeLabelRenderer>
+          <div style={{
+            position:"absolute",
+            transform:`translate(-50%,-180%) translate(${mx}px,${my}px)`,
+            fontSize:9, color:"#94a3b8", background:"rgba(255,255,255,0.85)",
+            padding:"1px 6px", borderRadius:3, whiteSpace:"nowrap",
+            pointerEvents:"none",
+          }}>
+            선 클릭 → 경유점 추가 · 경유점 더블클릭 → 삭제
+          </div>
+        </EdgeLabelRenderer>
+      )}
+
+      {/* 라벨 + IC 배지 */}
       {(showLabel || icNo) && (
         <EdgeLabelRenderer>
           <div style={{
@@ -1401,6 +1522,22 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 <select style={S} value={d.lineType||"Piping"} onChange={e=>upE("lineType",e.target.value)}>
                   {[...CONNECTION_LIST,...CONVEYOR_LIST].map(c=><option key={c}>{c}</option>)}
                 </select>
+
+                {/* 경유점(Route) 관리 */}
+                {(d.waypoints?.length>0) && (
+                  <div style={{ display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:7,padding:"4px 8px",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:5 }}>
+                    <span style={{ fontSize:11,color:"#92400e" }}>경유점 {d.waypoints.length}개</span>
+                    <button onClick={()=>upE("waypoints",[])}
+                      style={{ background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:11,fontWeight:600 }}>
+                      경로 초기화
+                    </button>
+                  </div>
+                )}
+                {!(d.waypoints?.length>0) && (
+                  <div style={{ fontSize:10,color:"#94a3b8",marginBottom:7 }}>
+                    라인 선택 후 클릭 → 경유점 추가
+                  </div>
+                )}
 
                 {/* Process Gas / Material 전용: 라인 텍스트 */}
                 {isSpecialLine&&(
@@ -1830,10 +1967,10 @@ const CanvasInner = () => {
     if(changed) setNodes(updated);
   },[edges,nodes.map(n=>n.position.x+","+n.position.y).join("|")]); // eslint-disable-line
 
-  // 인라인 편집 이벤트 수신
+  // ── 인라인 편집 + waypoint 이벤트 수신 ───────────────────
   useEffect(()=>{
     const fn=e=>{
-      const {id,label,itemNo,toggleIO}=e.detail;
+      const {id,label,itemNo,toggleIO,waypoints}=e.detail;
       setNodes(ns=>ns.map(n=>{
         if(n.id!==id) return n;
         if(label!==undefined)    return { ...n,data:{ ...n.data,label } };
@@ -1841,10 +1978,20 @@ const CanvasInner = () => {
         if(toggleIO!==undefined) return { ...n,data:{ ...n.data,showIO:toggleIO } };
         return n;
       }));
+      // waypoint → edge 업데이트
+      if(waypoints!==undefined){
+        setEdges(es=>es.map(e=>
+          e.id===id ? { ...e, data:{ ...e.data, waypoints } } : e
+        ));
+      }
     };
     window.addEventListener("mbse:updatelabel",fn);
-    return()=>window.removeEventListener("mbse:updatelabel",fn);
-  },[setNodes]);
+    window.addEventListener("mbse:updatewaypoint",fn);
+    return()=>{
+      window.removeEventListener("mbse:updatelabel",fn);
+      window.removeEventListener("mbse:updatewaypoint",fn);
+    };
+  },[setNodes,setEdges]);
 
   // DRAG
   const onDragStart=useCallback((e,cat,sub)=>{ e.dataTransfer.setData("mbse/cat",cat); e.dataTransfer.setData("mbse/sub",sub); e.dataTransfer.effectAllowed="move"; },[]);
