@@ -25,17 +25,91 @@ import ReactFlow, {
 import "reactflow/dist/style.css";
 
 // ─────────────────────────────────────────────────────────────
-// SHEETJS DYNAMIC LOADER
-// CDN에서 xlsx 라이브러리를 동적으로 불러옴
+// xlsx-js-style LOADER  (스타일 지원 SheetJS fork)
+// CDN: unpkg.com/xlsx-js-style
 // ─────────────────────────────────────────────────────────────
 const loadXLSX = () => new Promise((resolve, reject) => {
-  if (window.XLSX) { resolve(window.XLSX); return; }
+  if (window.XLSXStyle) { resolve(window.XLSXStyle); return; }
   const script = document.createElement("script");
-  script.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-  script.onload  = () => resolve(window.XLSX);
-  script.onerror = () => reject(new Error("SheetJS 로드 실패"));
+  script.src = "https://unpkg.com/xlsx-js-style@1.2.0/dist/xlsx.bundle.js";
+  script.onload  = () => {
+    if (window.XLSXStyle) { resolve(window.XLSXStyle); return; }
+    // fallback: 일부 빌드는 window.XLSX로 노출
+    if (window.XLSX) { window.XLSXStyle = window.XLSX; resolve(window.XLSX); return; }
+    reject(new Error("xlsx-js-style 로드 실패"));
+  };
+  script.onerror = () => {
+    // fallback to plain SheetJS
+    if (window.XLSX) { resolve(window.XLSX); return; }
+    const s2 = document.createElement("script");
+    s2.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+    s2.onload  = () => resolve(window.XLSX);
+    s2.onerror = () => reject(new Error("SheetJS 로드 실패"));
+    document.head.appendChild(s2);
+  };
   document.head.appendChild(script);
 });
+
+// ─────────────────────────────────────────────────────────────
+// 스타일 헬퍼 (xlsx-js-style 전용)
+// ─────────────────────────────────────────────────────────────
+const XS = {
+  // 셀 스타일 생성
+  s: (opts = {}) => ({
+    font:      { name:"Arial", sz: opts.sz||9, bold:!!opts.bold,
+                 color:{ rgb: opts.fc || "000000" } },
+    fill:      opts.bg
+                 ? { patternType:"solid", fgColor:{ rgb: opts.bg } }
+                 : { patternType:"none" },
+    alignment: { horizontal: opts.h||"center", vertical:"center",
+                 wrapText: !!opts.wrap },
+    border:    opts.border===false ? {} : {
+      top:    { style:"thin", color:{ rgb: opts.bc||"BFBFBF" } },
+      bottom: { style:"thin", color:{ rgb: opts.bc||"BFBFBF" } },
+      left:   { style:"thin", color:{ rgb: opts.bc||"BFBFBF" } },
+      right:  { style:"thin", color:{ rgb: opts.bc||"BFBFBF" } },
+    },
+  }),
+  // 셀 객체
+  c: (v, opts={}) => ({ v, s: XS.s(opts) }),
+  // 헤더 셀 (네이비 배경 흰 글씨)
+  hdr: (v) => XS.c(v,  { bold:true, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" }),
+  // 서브 헤더 (파란 배경 흰 글씨)
+  shdr:(v) => XS.c(v,  { bold:true, bg:"2E75B6", fc:"FFFFFF", bc:"2E75B6" }),
+  // 상태 셀
+  status: (v) => {
+    const map = {
+      "OPEN":        { bg:"FFF2CC", fc:"7F6000" },
+      "IN PROGRESS": { bg:"DDEBF7", fc:"1F4E79" },
+      "CLOSED":      { bg:"E2EFDA", fc:"375623" },
+      "OVERDUE":     { bg:"FCE4D6", fc:"843C0C" },
+    };
+    const m = map[v] || { bg:"F2F2F2", fc:"595959" };
+    return XS.c(v, { bold:true, ...m });
+  },
+  // 우선순위 셀
+  priority: (v) => {
+    const map = {
+      "Critical":{ fc:"DC2626" },
+      "High":    { fc:"EA580C" },
+      "Medium":  { fc:"CA8A04" },
+      "Low":     { fc:"16A34A" },
+    };
+    const m = map[v] || {};
+    return XS.c(v, { bold:true, ...m });
+  },
+  // 번갈아 배경 (짝수 행 연파랑)
+  alt: (v, i, opts={}) => XS.c(v, { bg: i%2===0 ? "FFFFFF":"F2F7FC", ...opts }),
+  // 컬럼 너비 자동 계산
+  colWidths: (headers, rows) =>
+    headers.map(h => ({
+      wch: Math.min(40, Math.max(
+        h.length+2,
+        ...rows.map(r => String(r[h]||"").length),
+        8
+      ))
+    })),
+};
 
 // ─────────────────────────────────────────────────────────────
 // EXCEL EXPORT — IC Register + ICD + Equipment + Requirements
@@ -295,42 +369,216 @@ const exportToExcel = async (nodes, edges) => {
   });
 
   // ══════════════════════════════════════════════════════════
-  // 워크북 조립
+  // 워크북 조립 — 서식 적용
   // ══════════════════════════════════════════════════════════
   const wb = XLSX.utils.book_new();
+  const today = new Date().toISOString().slice(0,10);
+  const toDate = new Date().toLocaleString("ko-KR",{
+    year:"numeric",month:"2-digit",day:"2-digit",
+    hour:"2-digit",minute:"2-digit"
+  });
 
-  const autoWidth = (ws, rows) => {
-    if (!rows.length) return;
-    const keys = Object.keys(rows[0]);
-    ws["!cols"] = keys.map(k => ({
-      wch: Math.min(
-        40,
-        Math.max(k.length + 2,
-          ...rows.map(r => String(r[k]||"").length), 8)
-      )
-    }));
+  // ── 공통: aoa → ws 변환 헬퍼 ──────────────────────────────
+  const aoaToSheet = (aoa) => {
+    const ws = {};
+    let maxC = 0;
+    aoa.forEach((row, R) => {
+      maxC = Math.max(maxC, row.length);
+      row.forEach((cell, C) => {
+        if (cell == null) return;
+        const ref = XLSX.utils.encode_cell({r:R, c:C});
+        if (typeof cell === "object" && "v" in cell) {
+          ws[ref] = cell;
+        } else {
+          ws[ref] = { v: cell, s: XS.s({ h:"left" }) };
+        }
+      });
+    });
+    ws["!ref"] = XLSX.utils.encode_range({
+      s:{r:0,c:0}, e:{r:aoa.length-1, c:maxC-1}
+    });
+    return ws;
   };
 
-  const wsIC    = XLSX.utils.json_to_sheet(
-    icRows.length ? icRows : [{"안내":"MBSE 모델에서 Area 경계를 넘는 연결이 없습니다."}]);
-  const wsEquip = XLSX.utils.json_to_sheet(
-    equipRows.length ? equipRows : [{"안내":"Equipment가 없습니다."}]);
-  const wsConn  = XLSX.utils.json_to_sheet(
-    connRows.length ? connRows : [{"안내":"Connection이 없습니다."}]);
-  const wsReq   = XLSX.utils.json_to_sheet(
-    reqRows.length ? reqRows : [{"안내":"등록된 요구사항이 없습니다."}]);
+  // ── SHEET 1: IC Register ───────────────────────────────────
+  const icHdrs = [
+    "IC No.","인터페이스 제목","분류","발신 조직 (From)","수신 조직 (To)",
+    "관련 Package","인터페이스 설명","유체/매체","Size","Schedule",
+    "Line No.","From 설비","To 설비","상태","우선순위",
+    "등록일","목표 완료일","실제 완료일","담당자 (From)","담당자 (To)",
+    "비고","ICD 번호",
+  ];
 
-  autoWidth(wsIC,    icRows);
-  autoWidth(wsEquip, equipRows);
-  autoWidth(wsConn,  connRows);
-  autoWidth(wsReq,   reqRows);
+  // 프로젝트 정보 행
+  const icAoa = [
+    // Row 0: 타이틀
+    [Object.assign(XS.hdr("IC&TI — Interface Check Register"), {
+      s: XS.s({ bold:true, sz:13, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(icHdrs.length-1).fill(null)],
+    // Row 1: 프로젝트 정보
+    [XS.c("Project", {bold:true,bg:"D9E1F2",fc:"1F3864",h:"left"}),
+     XS.c("수소환원제철 Plant — HyREX Project",{bg:"FFFFFF",h:"left"}),
+     null,null,
+     XS.c("작성일", {bold:true,bg:"D9E1F2",fc:"1F3864",h:"left"}),
+     XS.c(toDate,   {bg:"FFFFFF",h:"left"}),
+     null,null,
+     XS.c("총 IC 건수", {bold:true,bg:"D9E1F2",fc:"1F3864",h:"left"}),
+     XS.c(`${icRows.length}건`, {bold:true,bg:"FFFFFF",fc:"1D4ED8"}),
+     null,null,null,null,null,null,null,null,null,null,null,null],
+    // Row 2: 범례
+    [Object.assign(
+      XS.c("상태 범례:   OPEN = 미해결     IN PROGRESS = 진행중     CLOSED = 완료     OVERDUE = 지연",
+        { h:"left", bg:"F8F8F8", fc:"595959" }),
+      { s: { ...XS.s({h:"left",bg:"F8F8F8",fc:"595959"}),
+             font:{ name:"Arial",sz:8,italic:true,color:{rgb:"595959"} } } }
+    ), ...Array(icHdrs.length-1).fill(null)],
+    // Row 3: 헤더
+    icHdrs.map(h => XS.shdr(h)),
+    // 데이터 행
+    ...icRows.map((row, i) => icHdrs.map((h, j) => {
+      const v = row[h] ?? "";
+      if (h === "상태")    return XS.status(v);
+      if (h === "우선순위") return XS.priority(v);
+      if (h === "IC No."||h==="ICD 번호"||h==="Line No.")
+        return XS.alt(v, i, { bold:true, fc:"1D4ED8" });
+      if (h === "인터페이스 제목"||h==="인터페이스 설명")
+        return XS.alt(v, i, { h:"left", wrap:true });
+      return XS.alt(v, i, { h: j<2?"center":"left" });
+    })),
+    // 요약 행
+    [XS.c("집계", {bold:true,bg:"1F3864",fc:"FFFFFF"}),
+     XS.c(`전체 ${icRows.length}건`, {bold:true,bg:"2E75B6",fc:"FFFFFF"}),
+     null,null,null,null,null,null,null,null,null,null,null,
+     XS.c(`OPEN: ${icRows.filter(r=>r["상태"]==="OPEN").length}`,
+       {bold:true,bg:"FFF2CC",fc:"7F6000"}),
+     XS.c(`HIGH: ${icRows.filter(r=>r["우선순위"]==="High"||r["우선순위"]==="Critical").length}`,
+       {bold:true,bg:"FCE4D6",fc:"843C0C"}),
+     ...Array(icHdrs.length-15).fill(null)],
+  ];
 
-  XLSX.utils.book_append_sheet(wb, wsIC,    "IC Register");
-  XLSX.utils.book_append_sheet(wb, wsEquip, "Equipment List");
-  XLSX.utils.book_append_sheet(wb, wsConn,  "Connection List");
-  XLSX.utils.book_append_sheet(wb, wsReq,   "Requirements");
+  const wsIC = aoaToSheet(icAoa);
+  // 열 병합 (타이틀, 범례)
+  wsIC["!merges"] = [
+    { s:{r:0,c:0}, e:{r:0,c:icHdrs.length-1} },
+    { s:{r:2,c:0}, e:{r:2,c:icHdrs.length-1} },
+    { s:{r:1,c:1}, e:{r:1,c:3} },
+    { s:{r:1,c:5}, e:{r:1,c:7} },
+    { s:{r:1,c:9}, e:{r:1,c:11} },
+  ];
+  wsIC["!rows"] = [
+    {hpt:30},{hpt:20},{hpt:16},{hpt:24},
+    ...icRows.map(()=>({hpt:32})),
+    {hpt:20}
+  ];
+  wsIC["!cols"] = [
+    {wch:10},{wch:32},{wch:10},{wch:18},{wch:18},
+    {wch:18},{wch:36},{wch:16},{wch:8},{wch:8},
+    {wch:12},{wch:16},{wch:16},{wch:12},{wch:10},
+    {wch:12},{wch:12},{wch:12},{wch:14},{wch:14},
+    {wch:24},{wch:10},
+  ];
 
-  const today = new Date().toISOString().slice(0,10);
+  // ── SHEET 2: Equipment List ────────────────────────────────
+  const eqHdrs = [
+    "Item No.","설비명","설비 유형","소속 Area",
+    "재질","용량","설계 압력","설계 온도","연결 Interface 수","비고",
+  ];
+  const eqAoa = [
+    [Object.assign(XS.hdr("Equipment List"), {
+      s: XS.s({ bold:true, sz:12, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(eqHdrs.length-1).fill(null)],
+    [XS.c("작성일",{bold:true,bg:"D9E1F2",fc:"1F3864",h:"left"}),
+     XS.c(toDate,  {bg:"FFFFFF",h:"left"}),
+     null,
+     XS.c("총 설비 수",{bold:true,bg:"D9E1F2",fc:"1F3864",h:"left"}),
+     XS.c(`${equipRows.length}건`,{bold:true,bg:"FFFFFF",fc:"1D4ED8"}),
+     ...Array(eqHdrs.length-5).fill(null)],
+    eqHdrs.map(h => XS.shdr(h)),
+    ...equipRows.map((row,i) => eqHdrs.map((h,j) => {
+      const v = row[h] ?? "";
+      if (h==="Item No.") return XS.alt(v, i, { bold:true, fc:"1D4ED8" });
+      if (h==="연결 Interface 수") return XS.alt(
+        v, i,
+        { bold: v>0, fc: v>2?"DC2626":v>0?"EA580C":"16A34A" }
+      );
+      return XS.alt(v, i, { h: j<4?"center":"left" });
+    })),
+  ];
+  const wsEq = aoaToSheet(eqAoa);
+  wsEq["!merges"] = [
+    { s:{r:0,c:0}, e:{r:0,c:eqHdrs.length-1} },
+    { s:{r:1,c:1}, e:{r:1,c:2} },
+  ];
+  wsEq["!rows"] = [{hpt:28},{hpt:18},{hpt:22},...equipRows.map(()=>({hpt:22}))];
+  wsEq["!cols"] = [
+    {wch:12},{wch:22},{wch:20},{wch:22},
+    {wch:12},{wch:14},{wch:12},{wch:12},{wch:16},{wch:28},
+  ];
+
+  // ── SHEET 3: Connection List ───────────────────────────────
+  const cnHdrs = [
+    "Line No.","Line Type","Fluid (Primary)","Fluid (Sub)",
+    "Size","Schedule","Line Text",
+    "From (Item No.)","To (Item No.)","연결 IC No.","IC 상태",
+  ];
+  const cnAoa = [
+    [Object.assign(XS.hdr("Connection List"), {
+      s: XS.s({ bold:true, sz:12, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(cnHdrs.length-1).fill(null)],
+    cnHdrs.map(h => XS.shdr(h)),
+    ...connRows.map((row,i) => cnHdrs.map((h) => {
+      const v = row[h] ?? "";
+      if (h==="IC 상태") return XS.status(v||"—");
+      if (h==="Line No."||h==="연결 IC No.")
+        return XS.alt(v, i, { bold:true, fc:"1D4ED8" });
+      if (h==="Fluid (Sub)") {
+        const color = getFluidColor(v);
+        const rgb = color.replace("#","");
+        return XS.alt(v, i, { bold:true, fc: rgb });
+      }
+      return XS.alt(v, i);
+    })),
+  ];
+  const wsCn = aoaToSheet(cnAoa);
+  wsCn["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:cnHdrs.length-1} }];
+  wsCn["!rows"] = [{hpt:28},{hpt:22},...connRows.map(()=>({hpt:22}))];
+  wsCn["!cols"] = [
+    {wch:12},{wch:12},{wch:14},{wch:10},
+    {wch:8},{wch:8},{wch:16},
+    {wch:16},{wch:16},{wch:12},{wch:12},
+  ];
+
+  // ── SHEET 4: Requirements ──────────────────────────────────
+  const rqHdrs = [
+    "Item No.","설비 유형","소속 Area","Stakeholder","날짜","요구사항",
+  ];
+  const rqAoa = [
+    [Object.assign(XS.hdr("Requirements"), {
+      s: XS.s({ bold:true, sz:12, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(rqHdrs.length-1).fill(null)],
+    rqHdrs.map(h => XS.shdr(h)),
+    ...reqRows.map((row,i) => rqHdrs.map((h) => {
+      const v = row[h] ?? "";
+      const wrap = h==="요구사항";
+      return XS.alt(v, i,
+        { h: h==="요구사항"?"left":"center", wrap,
+          bold: h==="Item No.", fc: h==="Item No."?"1D4ED8":"000000" });
+    })),
+    ...(reqRows.length===0 ? [[XS.c("등록된 요구사항이 없습니다.",
+      {h:"center",fc:"94A3B8",border:false})]] : []),
+  ];
+  const wsRq = aoaToSheet(rqAoa);
+  wsRq["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:rqHdrs.length-1} }];
+  wsRq["!rows"] = [{hpt:28},{hpt:22},...reqRows.map(()=>({hpt:36}))];
+  wsRq["!cols"] = [
+    {wch:14},{wch:14},{wch:22},{wch:16},{wch:12},{wch:42},
+  ];
+
+  XLSX.utils.book_append_sheet(wb, wsIC,  "IC Register");
+  XLSX.utils.book_append_sheet(wb, wsEq,  "Equipment List");
+  XLSX.utils.book_append_sheet(wb, wsCn,  "Connection List");
+  XLSX.utils.book_append_sheet(wb, wsRq,  "Requirements");
+
   XLSX.writeFile(wb, `MBSE_ICRegister_${today}.xlsx`);
   return { icCount: icRows.length, equipCount: equipRows.length, connCount: connRows.length };
 };
