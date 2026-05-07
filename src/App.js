@@ -38,107 +38,307 @@ const loadXLSX = () => new Promise((resolve, reject) => {
 });
 
 // ─────────────────────────────────────────────────────────────
-// EXCEL EXPORT UTILITY
-// 시트 3개: Nodes / Edges / Requirements
+// EXCEL EXPORT — IC Register + ICD + Equipment + Requirements
 // ─────────────────────────────────────────────────────────────
 const exportToExcel = async (nodes, edges) => {
   const XLSX = await loadXLSX();
 
-  // ── Sheet 1: Nodes ────────────────────────────────────────
-  const nodeRows = nodes.map(n => {
-    const d = n.data || {};
-    return {
-      "ID":           n.id,
-      "Type":         n.type,
-      "Area Type":    d.areaType    || "",
-      "Item No":      d.itemNo      || "",
-      "Label":        d.label       || "",
-      "Equip Type":   d.equipType   || "",
-      "Material":     d.material    || "",
-      "Capacity":     d.capacity    || "",
-      "Design P":     d.designP     || "",
-      "Design T":     d.designT     || "",
-      "Instr Category": d.instrCategory || "",
-      "Instr Type":   d.instrType   || "",
-      "Notes":        d.summary     || "",
-      "Pos X":        Math.round(n.position?.x || 0),
-      "Pos Y":        Math.round(n.position?.y || 0),
-    };
-  });
+  // ── 유틸: 셀 스타일 헬퍼 ──────────────────────────────────
+  // SheetJS CE는 스타일을 직접 지원하지 않으므로
+  // xlsx-js-style CDN을 동적 로드해서 스타일 적용
+  // (없으면 기본 포맷으로 출력)
 
-  // ── Sheet 2: Edges ────────────────────────────────────────
-  const edgeRows = edges.map(e => {
-    const d = e.data || {};
-    // source/target 노드 이름 찾기
-    const srcNode = nodes.find(n => n.id === e.source);
-    const tgtNode = nodes.find(n => n.id === e.target);
-    const srcLabel = srcNode?.data?.itemNo || srcNode?.data?.label || e.source;
-    const tgtLabel = tgtNode?.data?.itemNo || tgtNode?.data?.label || e.target;
-    return {
-      "Edge ID":      e.id,
-      "Line Type":    d.lineType    || "Piping",
-      "From (ID)":    e.source,
-      "From (Name)":  srcLabel,
-      "To (ID)":      e.target,
-      "To (Name)":    tgtLabel,
-      "Serial No":    d.serialNo   || "",
-      "Size (DN)":    d.size       || "",
-      "Schedule":     d.spec       || "",
-      "Fluid Primary":d.fluidPrimary|| "",
-      "Fluid Sub":    d.fluidSub   || "",
-      "Line Text":    d.lineText   || "",
-    };
-  });
+  // ── Area 포함 노드 계산 ───────────────────────────────────
+  const getAreaOf = (node, allNodes) => {
+    return allNodes.find(a => {
+      if (a.type !== "area") return false;
+      const ax = a.position.x, ay = a.position.y;
+      const aw = a.style?.width || a.width || 260;
+      const ah = a.style?.height || a.height || 180;
+      return (
+        node.position.x >= ax && node.position.y >= ay &&
+        node.position.x <= ax + aw && node.position.y <= ay + ah
+      );
+    });
+  };
 
-  // ── Sheet 3: Requirements ─────────────────────────────────
-  const reqRows = [];
-  nodes.forEach(n => {
-    const d = n.data || {};
-    const name = d.itemNo || d.label || n.id;
-    (d.requirements || []).forEach(r => {
-      reqRows.push({
-        "Node ID":      n.id,
-        "Node Name":    name,
-        "Node Type":    n.type,
-        "Req ID":       r.id,
-        "Stakeholder":  r.who  || "",
-        "Date":         r.date || "",
-        "Requirement":  r.text || "",
+  // ── IC 번호 자동 생성 유틸 ────────────────────────────────
+  let icCounter = 1;
+  const nextIC = () => `IC-${String(icCounter++).padStart(3,"0")}`;
+
+  // ══════════════════════════════════════════════════════════
+  // SHEET 1: IC Register
+  // 경계를 넘는 모든 Connection → IC 항목으로 변환
+  // ══════════════════════════════════════════════════════════
+  const areaNodes = nodes.filter(n => n.type === "area");
+  const icRows = [];
+
+  // 각 Area별 경계 통과 엣지 수집
+  areaNodes.forEach(area => {
+    const ax = area.position.x, ay = area.position.y;
+    const aw = area.style?.width || area.width || 260;
+    const ah = area.style?.height || area.height || 180;
+    const areaLabel = area.data?.label
+      ? `[${area.data.areaType}] ${area.data.label}`
+      : `[${area.data.areaType}]`;
+
+    const insideIds = new Set(
+      nodes.filter(n => {
+        if (n.type === "area") return false;
+        return n.position.x >= ax && n.position.y >= ay &&
+               n.position.x <= ax+aw && n.position.y <= ay+ah;
+      }).map(n => n.id)
+    );
+    if (insideIds.size === 0) return;
+
+    edges.forEach(e => {
+      const srcIn = insideIds.has(e.source);
+      const tgtIn = insideIds.has(e.target);
+      if (srcIn === tgtIn) return; // 경계 통과 아님
+
+      const d = e.data || {};
+      const srcNode = nodes.find(n => n.id === e.source);
+      const tgtNode = nodes.find(n => n.id === e.target);
+      const srcLabel = srcNode?.data?.itemNo || srcNode?.data?.label || e.source;
+      const tgtLabel = tgtNode?.data?.itemNo || tgtNode?.data?.label || e.target;
+
+      const srcArea = getAreaOf(srcNode || {position:{x:-9999,y:-9999}}, nodes);
+      const tgtArea = getAreaOf(tgtNode || {position:{x:-9999,y:-9999}}, nodes);
+
+      const fromOrg = srcArea
+        ? (srcArea.data?.label
+            ? `[${srcArea.data.areaType}] ${srcArea.data.label}`
+            : `[${srcArea.data.areaType}]`)
+        : "외부";
+      const toOrg = tgtArea
+        ? (tgtArea.data?.label
+            ? `[${tgtArea.data.areaType}] ${tgtArea.data.label}`
+            : `[${tgtArea.data.areaType}]`)
+        : "외부";
+
+      const fluidSub  = d.fluidSub    || "";
+      const sizeVal   = d.sizeNum ? `${d.sizeNum}A` : (d.size || "");
+      const lineLabel = fluidSub && sizeVal
+        ? `${fluidSub}-${sizeVal}`
+        : fluidSub || sizeVal || d.lineType || "Piping";
+
+      const dir = tgtIn ? "INLET" : "OUTLET";
+
+      icRows.push({
+        "IC No.":           nextIC(),
+        "인터페이스 제목":   `${lineLabel} — ${fromOrg} → ${toOrg}`,
+        "분류":             d.lineType === "Process Gas" ? "Process"
+                           : d.lineType === "Duct"       ? "Mechanical"
+                           : d.lineType === "Conveyor"   ? "Mechanical"
+                           : "Process",
+        "발신 조직 (From)": fromOrg,
+        "수신 조직 (To)":   toOrg,
+        "관련 Package":     areaLabel,
+        "인터페이스 설명":  `${dir}: ${lineLabel} (${srcLabel} → ${tgtLabel})`,
+        "유체/매체":        d.fluidPrimary
+                             ? `${d.fluidPrimary} / ${fluidSub}`
+                             : (d.lineType || ""),
+        "Size":             sizeVal,
+        "Schedule":         d.spec      || "",
+        "Line No.":         d.serialNo  || "",
+        "Line Text":        d.lineText  || "",
+        "From 설비":        srcLabel,
+        "To 설비":          tgtLabel,
+        "상태":             "OPEN",
+        "우선순위":         fluidSub === "" ? "Medium" : "High",
+        "등록일":           new Date().toISOString().slice(0,10),
+        "목표 완료일":      "",
+        "실제 완료일":      "",
+        "담당자 (From)":    "",
+        "담당자 (To)":      "",
+        "비고":             "",
+        "ICD 번호":         `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+        "Edge ID":          e.id,
       });
     });
   });
 
-  // ── 워크북 생성 ──────────────────────────────────────────
+  // Area 없는 경계 통과 엣지도 추가
+  const allAreaInsideIds = new Set(
+    nodes.filter(n => {
+      if (n.type === "area") return false;
+      return areaNodes.some(a => {
+        const ax=a.position.x, ay=a.position.y;
+        const aw=a.style?.width||a.width||260;
+        const ah=a.style?.height||a.height||180;
+        return n.position.x>=ax&&n.position.y>=ay&&
+               n.position.x<=ax+aw&&n.position.y<=ay+ah;
+      });
+    }).map(n => n.id)
+  );
+  edges.forEach(e => {
+    if (icRows.find(r => r["Edge ID"] === e.id)) return;
+    const d = e.data || {};
+    const srcNode = nodes.find(n => n.id === e.source);
+    const tgtNode = nodes.find(n => n.id === e.target);
+    const srcLabel = srcNode?.data?.itemNo||srcNode?.data?.label||e.source;
+    const tgtLabel = tgtNode?.data?.itemNo||tgtNode?.data?.label||e.target;
+    const fluidSub = d.fluidSub || "";
+    const sizeVal  = d.sizeNum ? `${d.sizeNum}A` : (d.size || "");
+    const lineLabel = fluidSub && sizeVal
+      ? `${fluidSub}-${sizeVal}` : fluidSub||sizeVal||d.lineType||"Piping";
+    icRows.push({
+      "IC No.":           nextIC(),
+      "인터페이스 제목":   `${lineLabel} — ${srcLabel} → ${tgtLabel}`,
+      "분류":             "Process",
+      "발신 조직 (From)": srcLabel,
+      "수신 조직 (To)":   tgtLabel,
+      "관련 Package":     "",
+      "인터페이스 설명":  `${lineLabel} (${srcLabel} → ${tgtLabel})`,
+      "유체/매체":        d.fluidPrimary ? `${d.fluidPrimary} / ${fluidSub}` : (d.lineType||""),
+      "Size":             sizeVal,
+      "Schedule":         d.spec||"",
+      "Line No.":         d.serialNo||"",
+      "Line Text":        d.lineText||"",
+      "From 설비":        srcLabel,
+      "To 설비":          tgtLabel,
+      "상태":             "OPEN",
+      "우선순위":         "Medium",
+      "등록일":           new Date().toISOString().slice(0,10),
+      "목표 완료일":      "",
+      "실제 완료일":      "",
+      "담당자 (From)":    "",
+      "담당자 (To)":      "",
+      "비고":             "",
+      "ICD 번호":         `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+      "Edge ID":          e.id,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // SHEET 2: Equipment List (설비 목록)
+  // ══════════════════════════════════════════════════════════
+  const equipRows = nodes
+    .filter(n => n.type === "equipment" || n.type === "instrument")
+    .map(n => {
+      const d = n.data || {};
+      const area = getAreaOf(n, nodes);
+      const areaLabel = area
+        ? (area.data?.label
+            ? `[${area.data.areaType}] ${area.data.label}`
+            : `[${area.data.areaType}]`)
+        : "";
+      // 연결된 엣지 수
+      const connEdges = edges.filter(e => e.source===n.id||e.target===n.id);
+      return {
+        "Item No.":     d.itemNo      || "",
+        "설비명":        d.label       || d.equipType || d.instrCategory || "",
+        "설비 유형":     n.type === "instrument"
+                          ? `Instrument (${d.instrCategory||""} ${d.instrType||""})`
+                          : (d.equipType || ""),
+        "소속 Area":     areaLabel,
+        "재질":          d.material    || "",
+        "용량":          d.capacity    || "",
+        "설계 압력":     d.designP     || "",
+        "설계 온도":     d.designT     || "",
+        "연결 Interface 수": connEdges.length,
+        "비고":          d.summary     || "",
+        "Node ID":       n.id,
+      };
+    });
+
+  // ══════════════════════════════════════════════════════════
+  // SHEET 3: Connection List (배관 라인 목록)
+  // ══════════════════════════════════════════════════════════
+  const connRows = edges.map(e => {
+    const d = e.data || {};
+    const srcNode = nodes.find(n => n.id === e.source);
+    const tgtNode = nodes.find(n => n.id === e.target);
+    const srcLabel = srcNode?.data?.itemNo||srcNode?.data?.label||e.source;
+    const tgtLabel = tgtNode?.data?.itemNo||tgtNode?.data?.label||e.target;
+    const sizeVal  = d.sizeNum ? `${d.sizeNum}A` : (d.size||"");
+    const icMatch  = icRows.find(r => r["Edge ID"] === e.id);
+    return {
+      "Line No.":         d.serialNo   || "",
+      "Line Type":        d.lineType   || "Piping",
+      "Fluid (Primary)":  d.fluidPrimary|| "",
+      "Fluid (Sub)":      d.fluidSub   || "",
+      "Size":             sizeVal,
+      "Schedule":         d.spec       || "",
+      "Line Text":        d.lineText   || "",
+      "From (Item No.)":  srcLabel,
+      "To (Item No.)":    tgtLabel,
+      "연결 IC No.":       icMatch?.["IC No."] || "",
+      "IC 상태":           icMatch?.["상태"]   || "",
+      "Edge ID":           e.id,
+    };
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // SHEET 4: Requirements (요구사항)
+  // ══════════════════════════════════════════════════════════
+  const reqRows = [];
+  nodes.forEach(n => {
+    const d = n.data || {};
+    const area = getAreaOf(n, nodes);
+    const areaLabel = area
+      ? (area.data?.label
+          ? `[${area.data.areaType}] ${area.data.label}`
+          : `[${area.data.areaType}]`)
+      : "";
+    (d.requirements || []).forEach(r => {
+      reqRows.push({
+        "Node ID":      n.id,
+        "Item No.":     d.itemNo || d.label || "",
+        "설비 유형":     n.type,
+        "소속 Area":     areaLabel,
+        "Stakeholder":  r.who  || "",
+        "날짜":          r.date || "",
+        "요구사항":       r.text || "",
+      });
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // 워크북 조립
+  // ══════════════════════════════════════════════════════════
   const wb = XLSX.utils.book_new();
 
-  const wsNodes = XLSX.utils.json_to_sheet(nodeRows);
-  const wsEdges = XLSX.utils.json_to_sheet(edgeRows);
-  const wsReqs  = XLSX.utils.json_to_sheet(reqRows.length ? reqRows : [{ "Note":"등록된 요구사항 없음" }]);
-
-  // 컬럼 너비 자동 조정
   const autoWidth = (ws, rows) => {
     if (!rows.length) return;
     const keys = Object.keys(rows[0]);
     ws["!cols"] = keys.map(k => ({
-      wch: Math.max(k.length, ...rows.map(r => String(r[k]||"").length), 10)
+      wch: Math.min(
+        40,
+        Math.max(k.length + 2,
+          ...rows.map(r => String(r[k]||"").length), 8)
+      )
     }));
   };
-  autoWidth(wsNodes, nodeRows);
-  autoWidth(wsEdges, edgeRows);
-  autoWidth(wsReqs,  reqRows.length ? reqRows : []);
 
-  XLSX.utils.book_append_sheet(wb, wsNodes, "Nodes");
-  XLSX.utils.book_append_sheet(wb, wsEdges, "Edges");
-  XLSX.utils.book_append_sheet(wb, wsReqs,  "Requirements");
+  const wsIC    = XLSX.utils.json_to_sheet(
+    icRows.length ? icRows : [{"안내":"MBSE 모델에서 Area 경계를 넘는 연결이 없습니다."}]);
+  const wsEquip = XLSX.utils.json_to_sheet(
+    equipRows.length ? equipRows : [{"안내":"Equipment가 없습니다."}]);
+  const wsConn  = XLSX.utils.json_to_sheet(
+    connRows.length ? connRows : [{"안내":"Connection이 없습니다."}]);
+  const wsReq   = XLSX.utils.json_to_sheet(
+    reqRows.length ? reqRows : [{"안내":"등록된 요구사항이 없습니다."}]);
 
-  const today = new Date().toISOString().slice(0, 10);
-  XLSX.writeFile(wb, `MBSE_${today}.xlsx`);
+  autoWidth(wsIC,    icRows);
+  autoWidth(wsEquip, equipRows);
+  autoWidth(wsConn,  connRows);
+  autoWidth(wsReq,   reqRows);
+
+  XLSX.utils.book_append_sheet(wb, wsIC,    "IC Register");
+  XLSX.utils.book_append_sheet(wb, wsEquip, "Equipment List");
+  XLSX.utils.book_append_sheet(wb, wsConn,  "Connection List");
+  XLSX.utils.book_append_sheet(wb, wsReq,   "Requirements");
+
+  const today = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, `MBSE_ICRegister_${today}.xlsx`);
+  return { icCount: icRows.length, equipCount: equipRows.length, connCount: connRows.length };
 };
 
 // ─────────────────────────────────────────────────────────────
-// EXCEL IMPORT UTILITY
-// Nodes 시트: Item No / Label / 스펙 업데이트 (위치·연결 유지)
-// Edges 시트: Line 속성 업데이트
+// EXCEL IMPORT — IC Register → MBSE 모델 반영
+// IC Register 시트: 상태·담당자·비고 → Edge data 업데이트
+// Equipment List 시트: 스펙 → Node data 업데이트
 // Requirements 시트: 요구사항 병합
 // ─────────────────────────────────────────────────────────────
 const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
@@ -148,80 +348,127 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
     reader.onload = ev => {
       try {
         const wb = XLSX.read(ev.target.result, { type:"array" });
+        let updatedNodes = [...nodes];
+        let updatedEdges = [...edges];
+        const log = [];
 
-        // ── Nodes 시트 ──
-        const wsN = wb.Sheets["Nodes"];
-        if (wsN) {
-          const rows = XLSX.utils.sheet_to_json(wsN);
-          const updatedNodes = nodes.map(n => {
-            const row = rows.find(r => r["ID"] === n.id);
-            if (!row) return n;
-            return {
-              ...n,
-              data: {
-                ...n.data,
-                itemNo:       row["Item No"]      !== undefined ? String(row["Item No"])      : n.data.itemNo,
-                label:        row["Label"]         !== undefined ? String(row["Label"])         : n.data.label,
-                material:     row["Material"]      !== undefined ? String(row["Material"])      : n.data.material,
-                capacity:     row["Capacity"]      !== undefined ? String(row["Capacity"])      : n.data.capacity,
-                designP:      row["Design P"]      !== undefined ? String(row["Design P"])      : n.data.designP,
-                designT:      row["Design T"]      !== undefined ? String(row["Design T"])      : n.data.designT,
-                summary:      row["Notes"]         !== undefined ? String(row["Notes"])         : n.data.summary,
-                instrCategory:row["Instr Category"]!== undefined ? String(row["Instr Category"]): n.data.instrCategory,
-                instrType:    row["Instr Type"]    !== undefined ? String(row["Instr Type"])    : n.data.instrType,
-              }
-            };
-          });
-          setNodes(updatedNodes);
-        }
-
-        // ── Edges 시트 ──
-        const wsE = wb.Sheets["Edges"];
-        if (wsE) {
-          const rows = XLSX.utils.sheet_to_json(wsE);
-          const updatedEdges = edges.map(e => {
-            const row = rows.find(r => r["Edge ID"] === e.id);
-            if (!row) return e;
-            return {
+        // ── IC Register 시트 → Edge 업데이트 ─────────────
+        const wsIC = wb.Sheets["IC Register"];
+        if (wsIC) {
+          const rows = XLSX.utils.sheet_to_json(wsIC);
+          rows.forEach(row => {
+            const edgeId = row["Edge ID"];
+            if (!edgeId) return;
+            const idx = updatedEdges.findIndex(e => e.id === edgeId);
+            if (idx === -1) return;
+            const e = updatedEdges[idx];
+            updatedEdges[idx] = {
               ...e,
               data: {
                 ...e.data,
-                lineType:     row["Line Type"]    !== undefined ? String(row["Line Type"])    : e.data?.lineType,
-                serialNo:     row["Serial No"]    !== undefined ? String(row["Serial No"])    : e.data?.serialNo,
-                size:         row["Size (DN)"]    !== undefined ? String(row["Size (DN)"])    : e.data?.size,
-                spec:         row["Schedule"]     !== undefined ? String(row["Schedule"])     : e.data?.spec,
-                fluidPrimary: row["Fluid Primary"]!== undefined ? String(row["Fluid Primary"]): e.data?.fluidPrimary,
-                fluidSub:     row["Fluid Sub"]    !== undefined ? String(row["Fluid Sub"])    : e.data?.fluidSub,
-                lineText:     row["Line Text"]    !== undefined ? String(row["Line Text"])    : e.data?.lineText,
+                // IC Register에서 수정한 내용을 다시 반영
+                serialNo:    row["Line No."]       !== undefined
+                               ? String(row["Line No."]||"")     : e.data?.serialNo,
+                spec:        row["Schedule"]        !== undefined
+                               ? String(row["Schedule"]||"")     : e.data?.spec,
+                lineText:    row["Line Text"]       !== undefined
+                               ? String(row["Line Text"]||"")    : e.data?.lineText,
+                // IC 관리 데이터 (엣지에 저장)
+                ic_no:       row["IC No."]          ? String(row["IC No."])          : e.data?.ic_no,
+                ic_status:   row["상태"]             ? String(row["상태"])             : e.data?.ic_status,
+                ic_priority: row["우선순위"]          ? String(row["우선순위"])          : e.data?.ic_priority,
+                ic_due:      row["목표 완료일"]       ? String(row["목표 완료일"]||"")  : e.data?.ic_due,
+                ic_closed:   row["실제 완료일"]       ? String(row["실제 완료일"]||"")  : e.data?.ic_closed,
+                ic_resp_from:row["담당자 (From)"]    ? String(row["담당자 (From)"]||""): e.data?.ic_resp_from,
+                ic_resp_to:  row["담당자 (To)"]      ? String(row["담당자 (To)"]||"")  : e.data?.ic_resp_to,
+                ic_remark:   row["비고"]             ? String(row["비고"]||"")         : e.data?.ic_remark,
+                icd_no:      row["ICD 번호"]         ? String(row["ICD 번호"]||"")     : e.data?.icd_no,
+              }
+            };
+            log.push(`IC ${row["IC No."]} → Edge ${edgeId} 업데이트`);
+          });
+        }
+
+        // ── Equipment List 시트 → Node 업데이트 ──────────
+        const wsEq = wb.Sheets["Equipment List"];
+        if (wsEq) {
+          const rows = XLSX.utils.sheet_to_json(wsEq);
+          rows.forEach(row => {
+            const nodeId = row["Node ID"];
+            if (!nodeId) return;
+            const idx = updatedNodes.findIndex(n => n.id === nodeId);
+            if (idx === -1) return;
+            const n = updatedNodes[idx];
+            updatedNodes[idx] = {
+              ...n,
+              data: {
+                ...n.data,
+                itemNo:   row["Item No."] !== undefined ? String(row["Item No."]||"")  : n.data.itemNo,
+                label:    row["설비명"]    !== undefined ? String(row["설비명"]||"")     : n.data.label,
+                material: row["재질"]      !== undefined ? String(row["재질"]||"")      : n.data.material,
+                capacity: row["용량"]      !== undefined ? String(row["용량"]||"")      : n.data.capacity,
+                designP:  row["설계 압력"] !== undefined ? String(row["설계 압력"]||"") : n.data.designP,
+                designT:  row["설계 온도"] !== undefined ? String(row["설계 온도"]||"") : n.data.designT,
+                summary:  row["비고"]      !== undefined ? String(row["비고"]||"")      : n.data.summary,
+              }
+            };
+            log.push(`Equipment ${row["Item No."]} → Node ${nodeId} 업데이트`);
+          });
+        }
+
+        // ── Connection List 시트 → Edge 기본 속성 ────────
+        const wsConn = wb.Sheets["Connection List"];
+        if (wsConn) {
+          const rows = XLSX.utils.sheet_to_json(wsConn);
+          rows.forEach(row => {
+            const edgeId = row["Edge ID"];
+            if (!edgeId) return;
+            const idx = updatedEdges.findIndex(e => e.id === edgeId);
+            if (idx === -1) return;
+            const e = updatedEdges[idx];
+            const sizeRaw = row["Size"] ? String(row["Size"]||"") : "";
+            const sizeNum = sizeRaw.replace(/[^0-9]/g,"");
+            updatedEdges[idx] = {
+              ...e,
+              data: {
+                ...e.data,
+                serialNo:     row["Line No."]       ? String(row["Line No."]||"")    : e.data?.serialNo,
+                lineType:     row["Line Type"]       ? String(row["Line Type"]||"")  : e.data?.lineType,
+                fluidPrimary: row["Fluid (Primary)"] ? String(row["Fluid (Primary)"]||"") : e.data?.fluidPrimary,
+                fluidSub:     row["Fluid (Sub)"]     ? String(row["Fluid (Sub)"]||"")     : e.data?.fluidSub,
+                size:         sizeRaw,
+                sizeNum:      sizeNum,
+                spec:         row["Schedule"]        ? String(row["Schedule"]||"")   : e.data?.spec,
+                lineText:     row["Line Text"]       ? String(row["Line Text"]||"")  : e.data?.lineText,
               }
             };
           });
-          setEdges(updatedEdges);
         }
 
-        // ── Requirements 시트 ──
+        // ── Requirements 시트 ─────────────────────────────
         const wsR = wb.Sheets["Requirements"];
         if (wsR) {
           const rows = XLSX.utils.sheet_to_json(wsR);
-          // nodeId별로 그룹핑
           const reqMap = {};
           rows.forEach(r => {
-            if (!r["Node ID"] || !r["Requirement"]) return;
+            if (!r["Node ID"] || !r["요구사항"]) return;
             if (!reqMap[r["Node ID"]]) reqMap[r["Node ID"]] = [];
             reqMap[r["Node ID"]].push({
-              id:   r["Req ID"] || Date.now() + Math.random(),
-              text: String(r["Requirement"] || ""),
-              who:  String(r["Stakeholder"] || ""),
-              date: String(r["Date"] || ""),
+              id:   Date.now() + Math.random(),
+              text: String(r["요구사항"]   || ""),
+              who:  String(r["Stakeholder"]|| ""),
+              date: String(r["날짜"]        || ""),
             });
           });
-          setNodes(ns => ns.map(n => {
+          updatedNodes = updatedNodes.map(n => {
             if (!reqMap[n.id]) return n;
             return { ...n, data:{ ...n.data, requirements: reqMap[n.id] } };
-          }));
+          });
         }
 
-        resolve("Excel import 완료");
+        setNodes(updatedNodes);
+        setEdges(updatedEdges);
+        resolve({ log, msg:`IC Register Import 완료 — ${log.length}건 반영` });
       } catch(err) {
         reject(err);
       }
@@ -642,16 +889,26 @@ const PipeEdge = ({
   const sw        = ls.sw;
   const mkId      = `mk_${id}`;
 
-  // Process Gas / Material 은 lineText 라벨 표시
-  const isSpecial = lt==="Process Gas" || lt==="Material";
-  const labelText = data?.lineText || (isSpecial ? lt : null);
+  // IC 상태 색상
+  const icStatusColor = {
+    "OPEN":        "#CA8A04",
+    "IN PROGRESS": "#2563EB",
+    "CLOSED":      "#16A34A",
+    "OVERDUE":     "#DC2626",
+  };
 
-  // 라인 라벨: Fluid-SizeA 형식 (예: FW-200A)
+  // 라인 라벨: Fluid-SizeA 형식
   const fluidLabel = data?.fluidSub || "";
   const sizeLabel  = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
   const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
-
+  const isSpecial = lt==="Process Gas" || lt==="Material";
+  const labelText = data?.lineText || (isSpecial ? lt : null);
   const showLabel = isSpecial ? labelText : pipingLabel;
+
+  // IC 정보
+  const icNo     = data?.ic_no     || "";
+  const icStatus = data?.ic_status || "";
+  const icColor  = icStatusColor[icStatus] || "#64748B";
 
   const mx = (sourceX+targetX)/2;
   const my = (sourceY+targetY)/2;
@@ -671,21 +928,35 @@ const PipeEdge = ({
         strokeDasharray={ls.dash}
         markerEnd={`url(#${mkId})`}
         style={{ pointerEvents:"none" }}/>
-      {/* label */}
-      {showLabel && (
+      {/* 라인 라벨 + IC 상태 배지 */}
+      {(showLabel || icNo) && (
         <EdgeLabelRenderer>
           <div style={{
             position:"absolute",
             transform:`translate(-50%,-50%) translate(${mx}px,${my}px)`,
-            fontSize:10, fontWeight:isSpecial?700:600,
-            background:"rgba(255,255,255,0.92)",
-            padding:"1px 6px", borderRadius:4,
-            border:`1.5px solid ${baseColor}`,
-            color:baseColor,
-            pointerEvents:"none", whiteSpace:"nowrap",
-            boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
+            display:"flex", flexDirection:"column", alignItems:"center", gap:2,
+            pointerEvents:"none",
           }}>
-            {showLabel}
+            {showLabel && (
+              <div style={{
+                fontSize:10, fontWeight:isSpecial?700:600,
+                background:"rgba(255,255,255,0.92)",
+                padding:"1px 6px", borderRadius:4,
+                border:`1.5px solid ${baseColor}`, color:baseColor,
+                whiteSpace:"nowrap",
+                boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
+              }}>{showLabel}</div>
+            )}
+            {icNo && (
+              <div style={{
+                fontSize:9, fontWeight:700,
+                background: icStatus ? icColor : "#64748B",
+                color:"#fff", padding:"0px 5px", borderRadius:3,
+                whiteSpace:"nowrap",
+              }}>
+                {icNo}{icStatus ? ` · ${icStatus}` : ""}
+              </div>
+            )}
           </div>
         </EdgeLabelRenderer>
       )}
@@ -957,6 +1228,36 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                         </span>
                       </div>
                     )}
+                  </>
+                )}
+
+                {/* IC Register 연동 정보 (IC Register Import 후 표시) */}
+                {(d.ic_no||d.ic_status) && (
+                  <>
+                    <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"8px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>IC Register 정보</div>
+                    <div style={{ background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 10px",fontSize:11 }}>
+                      {[
+                        ["IC No.",    d.ic_no],
+                        ["ICD 번호",  d.icd_no],
+                        ["상태",      d.ic_status],
+                        ["우선순위",  d.ic_priority],
+                        ["마감일",    d.ic_due],
+                        ["완료일",    d.ic_closed],
+                        ["담당 (From)", d.ic_resp_from],
+                        ["담당 (To)",   d.ic_resp_to],
+                        ["비고",        d.ic_remark],
+                      ].filter(([,v])=>v).map(([k,v])=>(
+                        <div key={k} style={{ display:"flex",justifyContent:"space-between",marginBottom:3 }}>
+                          <span style={{ color:"#64748b",fontWeight:500 }}>{k}</span>
+                          <span style={{
+                            fontWeight:700,
+                            color: k==="상태"
+                              ? (v==="CLOSED"?"#16a34a":v==="OVERDUE"?"#dc2626":v==="IN PROGRESS"?"#2563eb":"#ca8a04")
+                              : "#1e293b"
+                          }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
                   </>
                 )}
               </>
@@ -1414,9 +1715,10 @@ const CanvasInner = () => {
   // Excel Export
   const onExcelExport = async () => {
     try {
-      setXlsxMsg("Excel 생성 중...");
-      await exportToExcel(nodes, edges);
-      setXlsxMsg("");
+      setXlsxMsg("IC Register 생성 중...");
+      const result = await exportToExcel(nodes, edges);
+      setXlsxMsg(`✅ IC ${result.icCount}건 / 설비 ${result.equipCount}건 Export 완료`);
+      setTimeout(()=>setXlsxMsg(""),3500);
     } catch(err) {
       setXlsxMsg("오류: " + err.message);
       setTimeout(()=>setXlsxMsg(""), 3000);
@@ -1427,10 +1729,10 @@ const CanvasInner = () => {
   const onExcelImport = async (e) => {
     const f = e.target.files[0]; if(!f) return;
     try {
-      setXlsxMsg("Excel 불러오는 중...");
-      await importFromExcel(f, nodes, edges, setNodes, setEdges);
-      setXlsxMsg("✅ Import 완료!");
-      setTimeout(()=>setXlsxMsg(""), 2500);
+      setXlsxMsg("IC Register 불러오는 중...");
+      const result = await importFromExcel(f, nodes, edges, setNodes, setEdges);
+      setXlsxMsg(`✅ ${result.msg}`);
+      setTimeout(()=>setXlsxMsg(""), 3000);
     } catch(err) {
       setXlsxMsg("오류: " + err.message);
       setTimeout(()=>setXlsxMsg(""), 4000);
@@ -1485,9 +1787,9 @@ const CanvasInner = () => {
             ⊞ 전체보기
           </button>
 
-          {/* Excel */}
-          <button onClick={onExcelExport} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 Excel ⬇</button>
-          <button onClick={()=>xlsxRef.current?.click()} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 Excel ⬆</button>
+          {/* Excel / IC Register */}
+          <button onClick={onExcelExport} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 IC Register ⬇</button>
+          <button onClick={()=>xlsxRef.current?.click()} style={{ background:"#14532d",color:"#86efac",border:"1px solid #166534",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:600 }}>📊 IC Register ⬆</button>
           <input ref={xlsxRef} type="file" accept=".xlsx,.xls" style={{ display:"none" }} onChange={onExcelImport}/>
 
           {/* 구분선 */}
