@@ -1214,23 +1214,62 @@ const InstrumentNode = memo(({ data, selected }) => (
 // ORTHOGONAL PATH BUILDER
 // waypoints 기반 직각 꺾임 경로 (수평→수직)
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// ROUNDED ELBOW PATH BUILDER
+// waypoints 기반 직각 꺾임 + 모서리 라운딩 (CAD 스타일)
+// ─────────────────────────────────────────────────────────────
+const ELBOW_R = 6; // 꺾임 반경 (px)
+
 const buildOrthogonalPath = (sx, sy, tx, ty, waypoints=[]) => {
-  if (waypoints.length === 0) {
-    const mx = (sx + tx) / 2;
-    return `M${sx},${sy} L${mx},${sy} L${mx},${ty} L${tx},${ty}`;
+  const pts = waypoints.length === 0
+    ? [{ x:sx,y:sy }, { x:(sx+tx)/2,y:sy }, { x:(sx+tx)/2,y:ty }, { x:tx,y:ty }]
+    : [{ x:sx,y:sy }, ...waypoints, { x:tx,y:ty }];
+
+  if (pts.length < 2) return `M${sx},${sy} L${tx},${ty}`;
+
+  // 불필요한 중복점 제거 (같은 좌표 연속)
+  const clean = pts.filter((p,i)=>
+    i===0 || Math.hypot(p.x-pts[i-1].x, p.y-pts[i-1].y) > 1
+  );
+
+  if (clean.length < 2) return `M${sx},${sy} L${tx},${ty}`;
+
+  // Rounded corner 경로 생성
+  let d = `M${clean[0].x},${clean[0].y}`;
+  for (let i = 1; i < clean.length; i++) {
+    const prev = clean[i-1];
+    const curr = clean[i];
+    const next = i < clean.length-1 ? clean[i+1] : null;
+
+    if (!next) {
+      // 마지막 점
+      d += ` L${curr.x},${curr.y}`;
+    } else {
+      // 꺾임점: 라운딩 처리
+      const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
+      const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
+      const len1 = Math.hypot(dx1, dy1) || 1;
+      const len2 = Math.hypot(dx2, dy2) || 1;
+      const r = Math.min(ELBOW_R, len1/2, len2/2);
+
+      // 꺾임점 진입·이탈 좌표
+      const x1 = curr.x - (dx1/len1)*r, y1 = curr.y - (dy1/len1)*r;
+      const x2 = curr.x + (dx2/len2)*r, y2 = curr.y + (dy2/len2)*r;
+
+      d += ` L${x1},${y1} Q${curr.x},${curr.y} ${x2},${y2}`;
+    }
   }
-  const pts = [{x:sx,y:sy}, ...waypoints, {x:tx,y:ty}];
-  return pts.map((p,i)=>(i===0?`M${p.x},${p.y}`:`L${p.x},${p.y}`)).join(" ");
+  return d;
 };
 
 // 자동 꺾임 경로의 꺾임점 좌표 계산 (waypoints 없을 때 기본 핸들 위치)
-const getDefaultBendPoints = (sx,sy,tx,ty) => {
+const getDefaultBendPoints = (sx, sy, tx, ty) => {
   const mx = (sx+tx)/2;
   return [
-    {x:sx,y:sy},   // 시작점
-    {x:mx,y:sy},   // 꺾임1
-    {x:mx,y:ty},   // 꺾임2
-    {x:tx,y:ty},   // 끝점
+    { x:sx, y:sy  },  // 시작점
+    { x:mx, y:sy  },  // 꺾임1
+    { x:mx, y:ty  },  // 꺾임2
+    { x:tx, y:ty  },  // 끝점
   ];
 };
 
@@ -1265,11 +1304,17 @@ const PipeEdge = ({
   const waypoints = data?.waypoints||[];
   const edgePath  = buildOrthogonalPath(sourceX,sourceY,targetX,targetY,waypoints);
 
-  // 라벨 위치
+  // 라벨 위치 및 각도 계산
   const allPts = [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
   const mid    = Math.floor(allPts.length/2);
-  const mx     = (allPts[Math.max(0,mid-1)].x+allPts[mid < allPts.length ? mid : mid-1].x)/2;
-  const my     = (allPts[Math.max(0,mid-1)].y+allPts[mid < allPts.length ? mid : mid-1].y)/2;
+  const pA     = allPts[Math.max(0,mid-1)];
+  const pB     = allPts[Math.min(allPts.length-1, mid)];
+  const mx     = (pA.x+pB.x)/2;
+  const my     = (pA.y+pB.y)/2;
+  // 라벨 회전 각도 (수평 세그먼트 = 0°, 수직 = 90°)
+  const rawAngle = Math.atan2(pB.y-pA.y, pB.x-pA.x) * 180 / Math.PI;
+  // 텍스트가 거꾸로 되지 않도록 조정
+  const labelAngle = rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
 
   // 핸들 위치 계산:
   // waypoints가 없으면 기본 꺾임점 4개, 있으면 waypoints를 꺾임점으로 사용
@@ -1361,9 +1406,12 @@ const PipeEdge = ({
   return (
     <g>
       <defs>
-        <marker id={mkId} markerWidth="5" markerHeight="4" refX="4.5" refY="2"
-          orient="auto" markerUnits="strokeWidth">
-          <polygon points="0 0,5 2,0 4" fill={stroke}/>
+        {/* Open Chevron 마커 — CAD 스타일 화살표 */}
+        <marker id={mkId} markerWidth="8" markerHeight="8"
+          refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+          <polyline points="1,1 7,4 1,7"
+            fill="none" stroke="context-stroke" strokeWidth="1.2"
+            strokeLinecap="round" strokeLinejoin="round"/>
         </marker>
       </defs>
 
@@ -1376,18 +1424,16 @@ const PipeEdge = ({
         strokeWidth={selected?sw+0.5:sw} strokeDasharray={ls.dash}
         markerEnd={`url(#${mkId})`} style={{pointerEvents:"none"}}/>
 
-      {/* 선택 시 핸들 — 시작·끝·꺾임점 모두 노란 원 */}
+      {/* 선택 시 핸들 */}
       {selected && handlePoints.map((hp,i)=>{
         const isEndPt = i===0||i===handlePoints.length-1;
         return (
           <g key={i}>
-            {/* 노란 원 핸들 */}
             <circle cx={hp.x} cy={hp.y} r={isEndPt?5:6}
               fill={isEndPt?"white":"#f59e0b"}
               stroke="#f59e0b" strokeWidth={isEndPt?2:1.5}
               style={{cursor:"move",pointerEvents:"all"}}
               onMouseDown={e=>onHandleDrag(e,i)}/>
-            {/* 더블클릭으로 중간 꺾임점 삭제 (끝점 제외) */}
             {!isEndPt && (
               <circle cx={hp.x} cy={hp.y} r={6} fill="transparent"
                 style={{pointerEvents:"all"}}
@@ -1401,12 +1447,12 @@ const PipeEdge = ({
         );
       })}
 
-      {/* 라벨 + IC 배지 */}
+      {/* 라벨 + IC 배지 — EdgeLabelRenderer 사용, 라벨 회전 포함 */}
       {(showLabel||icNo) && (
         <EdgeLabelRenderer>
           <div style={{
             position:"absolute",
-            transform:`translate(-50%,-50%) translate(${mx}px,${my}px)`,
+            transform:`translate(-50%,-50%) translate(${mx}px,${my}px) rotate(${labelAngle}deg)`,
             display:"flex",flexDirection:"column",alignItems:"center",gap:2,
             pointerEvents:"none",
           }}>
