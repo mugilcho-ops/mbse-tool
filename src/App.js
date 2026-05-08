@@ -1214,262 +1214,316 @@ const InstrumentNode = memo(({ data, selected }) => (
 // ORTHOGONAL PATH BUILDER
 // waypoints 기반 직각 꺾임 경로 (수평→수직)
 // ─────────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────────
-// ROUNDED ELBOW PATH BUILDER
-// waypoints 기반 직각 꺾임 + 모서리 라운딩 (CAD 스타일)
-// ─────────────────────────────────────────────────────────────
-const ELBOW_R = 6; // 꺾임 반경 (px)
+// ═══════════════════════════════════════════════════════════
+// PIPE EDGE — Rounded Elbow + Waypoint 드래그 Route 수정
+//
+// 설계 원칙:
+//  • 경로 포인트(pts)와 핸들 포인트를 완전히 동일하게 유지
+//  • pts = [src, ...waypoints, tgt]  (waypoints 없으면 꺾임점 2개 자동 생성)
+//  • 경로: 수평·수직만 이동, 꺾임 모서리에 radius=12 적용
+//  • 핸들: 선택 시 모든 pts에 노란 원 표시, 드래그로 이동
+//    - 시작점(i=0): y만 이동 (첫 수평 세그먼트 조정)
+//    - 끝점(i=last): y만 이동 (마지막 수평 세그먼트 조정)
+//    - 꺾임점(중간): 수평 세그먼트이면 y이동, 수직이면 x이동
+//  • 선 클릭: 선택 상태에서 세그먼트 클릭 → 꺾임점 삽입
+//  • 꺾임점 더블클릭 → 삭제
+// ═══════════════════════════════════════════════════════════
 
-const buildOrthogonalPath = (sx, sy, tx, ty, waypoints=[]) => {
-  const pts = waypoints.length === 0
-    ? [{ x:sx,y:sy }, { x:(sx+tx)/2,y:sy }, { x:(sx+tx)/2,y:ty }, { x:tx,y:ty }]
-    : [{ x:sx,y:sy }, ...waypoints, { x:tx,y:ty }];
+const ELBOW_R = 12; // 꺾임 반경 px (요구사항 radius=12)
 
-  if (pts.length < 2) return `M${sx},${sy} L${tx},${ty}`;
+// ── 1. 기본 꺾임점 생성 ──────────────────────────────────────
+// waypoints 없을 때 자동 라우팅: src → 수평 → 수직 → tgt
+// 반환: [src, bend1, bend2, tgt]
+const autoWaypoints = (sx, sy, tx, ty) => {
+  const mx = (sx + tx) / 2;
+  return [
+    { x: mx, y: sy },  // 꺾임1: 수평으로 mx까지
+    { x: mx, y: ty },  // 꺾임2: 수직으로 ty까지
+  ];
+};
 
-  // 불필요한 중복점 제거 (같은 좌표 연속)
-  const clean = pts.filter((p,i)=>
-    i===0 || Math.hypot(p.x-pts[i-1].x, p.y-pts[i-1].y) > 1
+// ── 2. Rounded Elbow SVG path ────────────────────────────────
+// pts = [{x,y}, ...] 직각 경유점 목록
+// 각 꺾임점에 Quadratic Bézier(Q) 적용
+// 예) ... L(mx-r,sy) Q(mx,sy) (mx,sy+r) ...
+const buildElbowPath = (pts, r = ELBOW_R) => {
+  if (pts.length < 2) return "";
+
+  // 중복 포인트 제거
+  const clean = pts.filter((p, i) =>
+    i === 0 || Math.hypot(p.x - pts[i-1].x, p.y - pts[i-1].y) > 0.5
   );
+  if (clean.length < 2) return "";
 
-  if (clean.length < 2) return `M${sx},${sy} L${tx},${ty}`;
+  let d = `M ${clean[0].x} ${clean[0].y}`;
 
-  // Rounded corner 경로 생성
-  let d = `M${clean[0].x},${clean[0].y}`;
   for (let i = 1; i < clean.length; i++) {
-    const prev = clean[i-1];
+    const prev = clean[i - 1];
     const curr = clean[i];
-    const next = i < clean.length-1 ? clean[i+1] : null;
+    const next = clean[i + 1];
 
     if (!next) {
-      // 마지막 점
-      d += ` L${curr.x},${curr.y}`;
+      // 마지막 점: 그냥 직선
+      d += ` L ${curr.x} ${curr.y}`;
     } else {
-      // 꺾임점: 라운딩 처리
+      // 꺾임점: 진입/이탈 방향 벡터
       const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
       const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
       const len1 = Math.hypot(dx1, dy1) || 1;
       const len2 = Math.hypot(dx2, dy2) || 1;
-      const r = Math.min(ELBOW_R, len1/2, len2/2);
+      const rr   = Math.min(r, len1 / 2, len2 / 2);
 
-      // 꺾임점 진입·이탈 좌표
-      const x1 = curr.x - (dx1/len1)*r, y1 = curr.y - (dy1/len1)*r;
-      const x2 = curr.x + (dx2/len2)*r, y2 = curr.y + (dy2/len2)*r;
+      // 꺾임점 진입 직전 좌표
+      const x1 = curr.x - (dx1 / len1) * rr;
+      const y1 = curr.y - (dy1 / len1) * rr;
+      // 꺾임점 이탈 직후 좌표
+      const x2 = curr.x + (dx2 / len2) * rr;
+      const y2 = curr.y + (dy2 / len2) * rr;
 
-      d += ` L${x1},${y1} Q${curr.x},${curr.y} ${x2},${y2}`;
+      // 직선 → 이차 베지어(Q) → 다음 직선 시작
+      d += ` L ${x1} ${y1} Q ${curr.x} ${curr.y} ${x2} ${y2}`;
     }
   }
   return d;
 };
 
-// 자동 꺾임 경로의 꺾임점 좌표 계산 (waypoints 없을 때 기본 핸들 위치)
-const getDefaultBendPoints = (sx, sy, tx, ty) => {
-  const mx = (sx+tx)/2;
-  return [
-    { x:sx, y:sy  },  // 시작점
-    { x:mx, y:sy  },  // 꺾임1
-    { x:mx, y:ty  },  // 꺾임2
-    { x:tx, y:ty  },  // 끝점
-  ];
-};
-
-// ─────────────────────────────────────────────────────────────
-// PIPE EDGE
-// - 선택하면 시작·끝·꺾임점에 노란 원 핸들 표시
-// - 핸들 드래그로 Route 조정 (PPT/Excel 꺾인선 방식)
-// - 시작·끝 핸들은 자유 이동, 꺾임 핸들은 수직/수평 제약
-// ─────────────────────────────────────────────────────────────
+// ── 3. PipeEdge 컴포넌트 ─────────────────────────────────────
 const PipeEdge = ({
   id, sourceX, sourceY, targetX, targetY,
-  sourcePosition, targetPosition, data, selected,
+  data, selected,
 }) => {
+  // ── 라인 스타일 ─────────────────────────────────────────
   const lt        = data?.lineType || "Piping";
   const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
   const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
   const stroke    = selected ? "#f59e0b" : baseColor;
-  const sw        = ls.sw;
+  const sw        = ls.sw || 1.5;
   const mkId      = `mk_${id}`;
 
-  const icStatusColor = {"OPEN":"#CA8A04","IN PROGRESS":"#2563EB","CLOSED":"#16A34A","OVERDUE":"#DC2626"};
+  // ── 라벨/IC 데이터 ────────────────────────────────────
+  const icStatusColor = {
+    "OPEN":"#CA8A04","IN PROGRESS":"#2563EB",
+    "CLOSED":"#16A34A","OVERDUE":"#DC2626",
+  };
   const fluidLabel  = data?.fluidSub || "";
-  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size||"");
-  const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
-  const isSpecial   = lt==="Process Gas"||lt==="Material";
-  const labelText   = data?.lineText||(isSpecial?lt:null);
-  const showLabel   = isSpecial?labelText:pipingLabel;
-  const icNo        = data?.ic_no||"";
-  const icStatus    = data?.ic_status||"";
-  const icColor     = icStatusColor[icStatus]||"#64748B";
+  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
+  const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
+  const isSpecial   = lt === "Process Gas" || lt === "Material";
+  const showLabel   = isSpecial
+    ? (data?.lineText || lt)
+    : pipingLabel;
+  const icNo     = data?.ic_no     || "";
+  const icStatus = data?.ic_status || "";
+  const icColor  = icStatusColor[icStatus] || "#64748B";
 
-  const waypoints = data?.waypoints||[];
-  const edgePath  = buildOrthogonalPath(sourceX,sourceY,targetX,targetY,waypoints);
+  // ── 경로 포인트 ──────────────────────────────────────
+  // pts: 실제 경로를 구성하는 모든 점
+  //   waypoints 없음 → [src, bend1, bend2, tgt] 자동 생성
+  //   waypoints 있음 → [src, ...waypoints, tgt]
+  const storedWp = data?.waypoints || [];
+  const wps      = storedWp.length > 0
+    ? storedWp
+    : autoWaypoints(sourceX, sourceY, targetX, targetY);
+  const pts = [
+    { x: sourceX, y: sourceY },
+    ...wps,
+    { x: targetX, y: targetY },
+  ];
 
-  // 라벨 위치 및 각도 계산
-  const allPts = [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
-  const mid    = Math.floor(allPts.length/2);
-  const pA     = allPts[Math.max(0,mid-1)];
-  const pB     = allPts[Math.min(allPts.length-1, mid)];
-  const mx     = (pA.x+pB.x)/2;
-  const my     = (pA.y+pB.y)/2;
-  // 라벨 회전 각도 (수평 세그먼트 = 0°, 수직 = 90°)
-  const rawAngle = Math.atan2(pB.y-pA.y, pB.x-pA.x) * 180 / Math.PI;
-  // 텍스트가 거꾸로 되지 않도록 조정
-  const labelAngle = rawAngle > 90 || rawAngle < -90 ? rawAngle + 180 : rawAngle;
+  const edgePath = buildElbowPath(pts);
 
-  // 핸들 위치 계산:
-  // waypoints가 없으면 기본 꺾임점 4개, 있으면 waypoints를 꺾임점으로 사용
-  const handlePoints = waypoints.length === 0
-    ? getDefaultBendPoints(sourceX,sourceY,targetX,targetY)
-    : [{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
+  // ── 라벨 위치/각도: 가장 긴 세그먼트 중앙 ───────────
+  let bestSeg = 0, bestLen = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const len = Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].y-pts[i].y);
+    if (len > bestLen) { bestLen = len; bestSeg = i; }
+  }
+  const pA  = pts[bestSeg], pB = pts[bestSeg + 1];
+  const lx  = (pA.x + pB.x) / 2;
+  const ly  = (pA.y + pB.y) / 2;
+  const raw = Math.atan2(pB.y - pA.y, pB.x - pA.x) * 180 / Math.PI;
+  const labelAngle = raw > 90 || raw < -90 ? raw + 180 : raw;
 
-  // SVG 좌표 변환 헬퍼
-  const getSVGPos = (svg, ev) => {
+  // ── SVG 좌표 헬퍼 ─────────────────────────────────────
+  const toSVG = (svg, ev) => {
     const pt = svg.createSVGPoint();
-    pt.x=ev.clientX; pt.y=ev.clientY;
+    pt.x = ev.clientX; pt.y = ev.clientY;
     return pt.matrixTransform(svg.getScreenCTM().inverse());
   };
 
-  // ── 핸들 드래그 ─────────────────────────────────────────
-  const onHandleDrag = useCallback((e, hIdx) => {
+  // ── 핸들 드래그 ───────────────────────────────────────
+  // 드래그 규칙:
+  //   i=0 (src):  wps[0].y 조정  (첫 수평 세그먼트 높낮이)
+  //   i=last(tgt): wps[last].y 조정
+  //   i=중간:
+  //     직전 세그먼트가 수평(y 같음) → 이 꺾임점의 x 조정
+  //     직전 세그먼트가 수직(x 같음) → 이 꺾임점의 y 조정
+  const onHandleDrag = useCallback((e, pIdx) => {
     e.stopPropagation();
-    const svg = e.target.closest("svg"); if(!svg) return;
-    const isStart = hIdx===0;
-    const isEnd   = hIdx===handlePoints.length-1;
+    const svg = e.target.closest("svg"); if (!svg) return;
 
-    // 현재 waypoints (없으면 기본 꺾임점에서 중간 2개를 초기 waypoints로 설정)
-    const initWp = waypoints.length===0
-      ? [{x:(sourceX+targetX)/2,y:sourceY},{x:(sourceX+targetX)/2,y:targetY}]
-      : [...waypoints];
-
-    const origPos = getSVGPos(svg,e);
-    const origWp  = initWp.map(p=>({...p}));
-    const origHPts= getDefaultBendPoints(sourceX,sourceY,targetX,targetY);
+    const origSVG = toSVG(svg, e);
+    const origWps = wps.map(p => ({ ...p }));  // 현재 wps 스냅샷
 
     const onMove = mv => {
-      const cur = getSVGPos(svg,mv);
-      const dx=cur.x-origPos.x, dy=cur.y-origPos.y;
-      const newWp = origWp.map(p=>({...p}));
+      const cur = toSVG(svg, mv);
+      const dx  = cur.x - origSVG.x;
+      const dy  = cur.y - origSVG.y;
+      const nw  = origWps.map(p => ({ ...p }));
 
-      if(isStart || isEnd) {
-        // 시작/끝점: 꺾임선 전체 구조 유지하며 이동
-        if(isStart){
-          newWp[0]={x:origWp[0].x, y:origWp[0].y+dy}; // 첫 꺾임y 조정
-        } else {
-          newWp[newWp.length-1]={x:origWp[newWp.length-1].x, y:origWp[newWp.length-1].y+dy};
-        }
+      if (pIdx === 0) {
+        // src 핸들: 첫 꺾임점 y 조정
+        nw[0] = { x: nw[0].x, y: origWps[0].y + dy };
+      } else if (pIdx === pts.length - 1) {
+        // tgt 핸들: 마지막 꺾임점 y 조정
+        nw[nw.length - 1] = {
+          x: nw[nw.length - 1].x,
+          y: origWps[nw.length - 1].y + dy,
+        };
       } else {
-        // 중간 꺾임점: 수평/수직 방향 결정
-        const wpIdx = hIdx-1; // handlePoints 인덱스 → waypoints 인덱스
-        const prev = wpIdx>0 ? origWp[wpIdx-1] : {x:sourceX,y:sourceY};
-        const isHoriz = Math.abs(prev.y - origWp[wpIdx].y) < 10;
-        if(isHoriz){
-          newWp[wpIdx]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx].y};
-          // 인접 수직 세그먼트도 같이 이동
-          if(wpIdx+1<newWp.length) newWp[wpIdx+1]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx+1].y};
-          if(wpIdx>0) newWp[wpIdx-1]={x:origWp[wpIdx].x+dx, y:origWp[wpIdx-1].y};
+        // 중간 꺾임점: wps 인덱스 = pIdx - 1
+        const wi    = pIdx - 1;
+        const prevP = pIdx === 1
+          ? { x: sourceX, y: sourceY }
+          : origWps[wi - 1];
+        const isHoriz = Math.abs(prevP.y - origWps[wi].y) < 8;
+
+        if (isHoriz) {
+          // 수평 세그먼트 위 꺾임점 → x 방향으로만 이동
+          nw[wi] = { x: origWps[wi].x + dx, y: origWps[wi].y };
+          // 인접 세그먼트도 x 맞춤
+          if (wi + 1 < nw.length)
+            nw[wi + 1] = { x: origWps[wi].x + dx, y: nw[wi + 1].y };
         } else {
-          newWp[wpIdx]={x:origWp[wpIdx].x, y:origWp[wpIdx].y+dy};
-          if(wpIdx+1<newWp.length) newWp[wpIdx+1]={x:origWp[wpIdx+1].x, y:origWp[wpIdx].y+dy};
-          if(wpIdx>0) newWp[wpIdx-1]={x:origWp[wpIdx-1].x, y:origWp[wpIdx].y+dy};
+          // 수직 세그먼트 위 꺾임점 → y 방향으로만 이동
+          nw[wi] = { x: origWps[wi].x, y: origWps[wi].y + dy };
+          // 인접 세그먼트도 y 맞춤
+          if (wi - 1 >= 0)
+            nw[wi - 1] = { x: nw[wi - 1].x, y: origWps[wi].y + dy };
         }
       }
-      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+        { detail: { id, waypoints: nw } }));
     };
-    const onUp=()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
-    window.addEventListener("mousemove",onMove);
-    window.addEventListener("mouseup",onUp);
-  },[id,waypoints,handlePoints,sourceX,sourceY,targetX,targetY]);
 
-  // 선 클릭 → 중간 꺾임점 추가 (이미 waypoints 있으면 세그먼트 분할)
-  const onPathClick = useCallback(e=>{
-    if(!selected) return;
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup",   onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup",   onUp);
+  }, [id, wps, pts.length, sourceX, sourceY]);
+
+  // ── 선 클릭 → 꺾임점 삽입 ──────────────────────────
+  const onPathClick = useCallback(e => {
+    if (!selected) return;
     e.stopPropagation();
-    const svg=e.target.closest("svg"); if(!svg) return;
-    const pos=getSVGPos(svg,e);
-    // 가장 가까운 세그먼트에 꺾임점 삽입
-    const pts=[{x:sourceX,y:sourceY},...waypoints,{x:targetX,y:targetY}];
-    let minD=Infinity,insIdx=0;
-    for(let i=0;i<pts.length-1;i++){
-      const a=pts[i],b=pts[i+1];
-      const dx=b.x-a.x,dy=b.y-a.y,len=dx*dx+dy*dy||1;
-      const t=Math.max(0,Math.min(1,((pos.x-a.x)*dx+(pos.y-a.y)*dy)/len));
-      const d=Math.hypot(pos.x-(a.x+t*dx),pos.y-(a.y+t*dy));
-      if(d<minD){minD=d;insIdx=i;}
-    }
-    const a=pts[insIdx],b=pts[insIdx+1];
-    const isH=Math.abs(a.y-b.y)<10;
-    const newWp=[...waypoints];
-    newWp.splice(insIdx,0,isH?{x:pos.x,y:a.y}:{x:a.x,y:pos.y});
-    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
-  },[id,selected,waypoints,sourceX,sourceY,targetX,targetY]);
+    const svg = e.target.closest("svg"); if (!svg) return;
+    const pos = toSVG(svg, e);
 
+    // 가장 가까운 세그먼트 탐색
+    let minD = Infinity, insIdx = 0;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i+1];
+      const abx = b.x-a.x, aby = b.y-a.y, len2 = abx*abx+aby*aby||1;
+      const t = Math.max(0, Math.min(1,
+        ((pos.x-a.x)*abx + (pos.y-a.y)*aby) / len2));
+      const d = Math.hypot(pos.x - (a.x+t*abx), pos.y - (a.y+t*aby));
+      if (d < minD) { minD = d; insIdx = i; }
+    }
+
+    // 세그먼트 방향에 따라 새 꺾임점 좌표 결정
+    const a = pts[insIdx], b = pts[insIdx+1];
+    const isH = Math.abs(a.y - b.y) < 8;
+    const nw  = [...wps];
+    // insIdx는 pts 기준이므로 wps에 삽입할 위치 = insIdx
+    nw.splice(insIdx, 0, isH ? { x: pos.x, y: a.y } : { x: a.x, y: pos.y });
+    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+      { detail: { id, waypoints: nw } }));
+  }, [id, selected, wps, pts, sourceX, sourceY, targetX, targetY]);
+
+  // ── 렌더 ────────────────────────────────────────────
   return (
     <g>
       <defs>
-        {/* Open Chevron 마커 — CAD 스타일 화살표 */}
-        <marker id={mkId} markerWidth="8" markerHeight="8"
-          refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
-          <polyline points="1,1 7,4 1,7"
-            fill="none" stroke="context-stroke" strokeWidth="1.2"
-            strokeLinecap="round" strokeLinejoin="round"/>
+        {/* Open Chevron 화살표 (context-stroke로 라인 색 자동 상속) */}
+        <marker id={mkId} markerWidth="10" markerHeight="10"
+          refX="8" refY="5" orient="auto" markerUnits="strokeWidth">
+          <polyline points="1,1 8,5 1,9"
+            fill="none" stroke="context-stroke"
+            strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
         </marker>
       </defs>
 
-      {/* 히트영역 */}
+      {/* 넓은 히트 영역 (클릭 감지용) */}
       <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16}
-        style={{cursor:selected?"crosshair":"pointer"}} onClick={onPathClick}/>
+        style={{ cursor: selected ? "crosshair" : "pointer" }}
+        onClick={onPathClick}/>
 
       {/* 실제 라인 */}
-      <path d={edgePath} fill="none" stroke={stroke}
-        strokeWidth={selected?sw+0.5:sw} strokeDasharray={ls.dash}
-        markerEnd={`url(#${mkId})`} style={{pointerEvents:"none"}}/>
+      <path d={edgePath} fill="none"
+        stroke={stroke} strokeWidth={sw}
+        strokeDasharray={ls.dash}
+        markerEnd={`url(#${mkId})`}
+        style={{ pointerEvents: "none" }}/>
 
-      {/* 선택 시 핸들 */}
-      {selected && handlePoints.map((hp,i)=>{
-        const isEndPt = i===0||i===handlePoints.length-1;
+      {/* 선택 시: 모든 pts에 노란 원 핸들 */}
+      {selected && pts.map((hp, i) => {
+        const isEnd = i === 0 || i === pts.length - 1;
         return (
           <g key={i}>
-            <circle cx={hp.x} cy={hp.y} r={isEndPt?5:6}
-              fill={isEndPt?"white":"#f59e0b"}
-              stroke="#f59e0b" strokeWidth={isEndPt?2:1.5}
-              style={{cursor:"move",pointerEvents:"all"}}
-              onMouseDown={e=>onHandleDrag(e,i)}/>
-            {!isEndPt && (
-              <circle cx={hp.x} cy={hp.y} r={6} fill="transparent"
-                style={{pointerEvents:"all"}}
-                onDoubleClick={e=>{
+            <circle
+              cx={hp.x} cy={hp.y}
+              r={isEnd ? 5 : 7}
+              fill={isEnd ? "white" : "#f59e0b"}
+              stroke="#f59e0b"
+              strokeWidth={isEnd ? 2 : 1.5}
+              style={{ cursor: "move", pointerEvents: "all" }}
+              onMouseDown={e => onHandleDrag(e, i)}/>
+            {/* 중간 꺾임점: 더블클릭으로 삭제 */}
+            {!isEnd && (
+              <circle cx={hp.x} cy={hp.y} r={7}
+                fill="transparent"
+                style={{ pointerEvents: "all" }}
+                onDoubleClick={e => {
                   e.stopPropagation();
-                  const newWp=waypoints.filter((_,idx)=>idx!==i-1);
-                  window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",{detail:{id,waypoints:newWp}}));
+                  // wps에서 i-1번째 제거 (pts[i] = wps[i-1])
+                  const nw = wps.filter((_, idx) => idx !== i - 1);
+                  window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+                    { detail: { id, waypoints: nw } }));
                 }}/>
             )}
           </g>
         );
       })}
 
-      {/* 라벨 + IC 배지 — EdgeLabelRenderer 사용, 라벨 회전 포함 */}
-      {(showLabel||icNo) && (
+      {/* 라벨 + IC 배지 */}
+      {(showLabel || icNo) && (
         <EdgeLabelRenderer>
           <div style={{
-            position:"absolute",
-            transform:`translate(-50%,-50%) translate(${mx}px,${my}px) rotate(${labelAngle}deg)`,
-            display:"flex",flexDirection:"column",alignItems:"center",gap:2,
-            pointerEvents:"none",
+            position: "absolute",
+            transform: `translate(-50%,-50%) translate(${lx}px,${ly}px) rotate(${labelAngle}deg)`,
+            display: "flex", flexDirection: "column",
+            alignItems: "center", gap: 2,
+            pointerEvents: "none",
           }}>
-            {showLabel&&(
+            {showLabel && (
               <div style={{
-                fontSize:10,fontWeight:isSpecial?700:600,
-                background:"rgba(255,255,255,0.92)",padding:"1px 6px",
-                borderRadius:4,border:`1.5px solid ${baseColor}`,color:baseColor,
-                whiteSpace:"nowrap",boxShadow:"0 1px 3px rgba(0,0,0,0.08)",
+                fontSize: 10, fontWeight: isSpecial ? 700 : 600,
+                background: "rgba(255,255,255,0.93)",
+                padding: "1px 6px", borderRadius: 4,
+                border: `1.5px solid ${baseColor}`, color: baseColor,
+                whiteSpace: "nowrap",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.09)",
               }}>{showLabel}</div>
             )}
-            {icNo&&(
+            {icNo && (
               <div style={{
-                fontSize:9,fontWeight:700,
-                background:icStatus?icColor:"#64748B",
-                color:"#fff",padding:"0px 5px",borderRadius:3,whiteSpace:"nowrap",
-              }}>{icNo}{icStatus?` · ${icStatus}`:""}</div>
+                fontSize: 9, fontWeight: 700,
+                background: icStatus ? icColor : "#64748B",
+                color: "#fff", padding: "0 5px",
+                borderRadius: 3, whiteSpace: "nowrap",
+              }}>{icNo}{icStatus ? ` · ${icStatus}` : ""}</div>
             )}
           </div>
         </EdgeLabelRenderer>
