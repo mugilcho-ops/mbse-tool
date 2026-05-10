@@ -20,7 +20,6 @@ import ReactFlow, {
   NodeResizer,
   EdgeLabelRenderer,
   ConnectionMode,
-  getSmoothStepPath,
 } from "reactflow";
 import "reactflow/dist/style.css";
 
@@ -744,30 +743,48 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
 // GLOBAL CSS
 // ─────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
+  /* ── 포트 핸들: 기본 숨김, hover/선택 시 표시 ── */
   .react-flow__handle {
+    width: 10px !important;
+    height: 10px !important;
+    border-radius: 50% !important;
+    background: #0d9488 !important;   /* teal */
+    border: 2px solid #fff !important;
     opacity: 0 !important;
     transition: opacity 0.15s ease, transform 0.15s ease !important;
+    z-index: 20 !important;
   }
-  .react-flow__node:hover .react-flow__handle { opacity: 1 !important; }
-  .react-flow__node.selected .react-flow__handle { opacity: 1 !important; }
-  .react-flow__handle:hover { opacity: 1 !important; transform: scale(1.4) !important; }
-  .react-flow__handle.connecting { opacity: 1 !important; }
-  /* 범위 선택 박스 스타일 */
+  .react-flow__node:hover .react-flow__handle {
+    opacity: 1 !important;
+  }
+  .react-flow__node.selected .react-flow__handle {
+    opacity: 1 !important;
+  }
+  .react-flow__handle:hover {
+    opacity: 1 !important;
+    transform: scale(1.5) !important;
+    background: #0f766e !important;
+  }
+  .react-flow__handle.connecting {
+    opacity: 1 !important;
+    transform: scale(1.3) !important;
+  }
+  /* 연결 드래그 중 전체 핸들 표시 */
+  .react-flow__pane.connecting .react-flow__handle {
+    opacity: 0.8 !important;
+  }
+  /* 범위 선택 박스 */
   .react-flow__selection {
-    background: rgba(59,130,246,0.08) !important;
-    border: 1.5px dashed #3b82f6 !important;
+    background: rgba(37,99,235,0.06) !important;
+    border: 1.5px dashed #2563eb !important;
     border-radius: 4px !important;
   }
-  /* 선택된 노드 강조 */
-  .react-flow__node.selected > div {
-    box-shadow: 0 0 0 2px #3b82f6 !important;
-  }
   .mbse-label-input {
-    background: rgba(255,255,255,0.95);
+    background: rgba(255,255,255,0.97);
     border: 1.5px solid #3b82f6;
     border-radius: 4px;
     padding: 2px 6px;
-    font-size: 11px;
+    font-size: 12px;
     font-weight: 700;
     text-align: center;
     outline: none;
@@ -1214,357 +1231,285 @@ const InstrumentNode = memo(({ data, selected }) => (
 // ORTHOGONAL PATH BUILDER
 // waypoints 기반 직각 꺾임 경로 (수평→수직)
 // ─────────────────────────────────────────────────────────────
-// ═══════════════════════════════════════════════════════════
-// PIPE EDGE — 포트 방향 인식 직각 라우팅 + Rounded Elbow
+// ═══════════════════════════════════════════════════════════════
+// PIPE EDGE SYSTEM — 완전 재작성
 //
-//  sourceX/Y, targetX/Y = ReactFlow이 계산한 포트 좌표 (정확)
-//  sourcePosition / targetPosition = 포트가 붙은 면 (Top/Bottom/Left/Right)
-//
-//  자동 라우팅:
-//   포트에서 STUB(20px) 직선 → 꺾임 → 상대 STUB로 진입
-//   예) Right→Left:  sx→ stub_x → mx → tgt_stub → tx
-//
-//  waypoints 드래그: 저장된 wps 그대로 사용 (자동 라우팅 무시)
-//  핸들: 선택 시 pts 전체에 노란 원, 드래그로 x/y 이동
-//  꺾임 radius = 12px (Q 베지어)
-// ═══════════════════════════════════════════════════════════
+// 발췌 적용 (첨부 프롬프트):
+//  ① 포트방향 인식 orthogonal 자동 라우팅 (노드 bbox 회피)
+//  ② 꺾임 radius=6px (Q 베지어)
+//  ③ 화살표: 채워진 삼각형 (10×6px)
+//  ④ 선택 시 세그먼트 중앙 핸들 (수평↕ / 수직↔ 파란 사각형)
+//  ⑤ 라벨: 가장 긴 세그먼트 중앙
+// ═══════════════════════════════════════════════════════════════
 
-const ELBOW_R = 12;
-const STUB    = 20; // 포트 직선 연장 거리 (px)
+const ELBOW_R = 6;   // 꺾임 반경 (첨부: 6px)
+const STUB    = 30;  // 포트 이탈 최소 거리
 
-// ── 포트 방향 → 오프셋 벡터 ──────────────────────────────
-const stubOffset = (pos) => {
-  switch (pos) {
-    case "right":  return {  dx: STUB, dy: 0     };
-    case "left":   return {  dx:-STUB, dy: 0     };
-    case "bottom": return {  dx: 0,   dy: STUB   };
-    case "top":    return {  dx: 0,   dy:-STUB   };
-    default:       return {  dx: STUB, dy: 0     };
-  }
+// ── 포트 방향 → 이탈 벡터 ────────────────────────────────────
+const portVec = pos => {
+  if (pos === "right")  return { dx: 1, dy: 0 };
+  if (pos === "left")   return { dx:-1, dy: 0 };
+  if (pos === "bottom") return { dx: 0, dy: 1 };
+  if (pos === "top")    return { dx: 0, dy:-1 };
+  return { dx: 1, dy: 0 };
 };
 
-// ── 포트 방향 인식 자동 라우팅 ───────────────────────────
-// 반환: wps (waypoints) — src/tgt 자체는 포함 안 함
-const autoRoute = (sx, sy, srcPos, tx, ty, tgtPos) => {
-  const so = stubOffset(srcPos);
-  const to = stubOffset(tgtPos);
-
-  const sx2 = sx + so.dx; // source stub 끝점
-  const sy2 = sy + so.dy;
-  const tx2 = tx + to.dx; // target stub 끝점 (역방향)
-  const ty2 = ty + to.dy;
-
-  // stub 끝점이 같은 수평/수직 선상이면 바로 연결
-  if (Math.abs(sy2 - ty2) < 2) {
-    // 같은 y → 수평 직선
-    return [];
-  }
-  if (Math.abs(sx2 - tx2) < 2) {
-    // 같은 x → 수직 직선
-    return [{ x: sx2, y: sy2 }, { x: tx2, y: ty2 }];
+// ── 포트방향 인식 직각 라우팅 ────────────────────────────────
+// 반환: pts 전체 [{x,y},...] (src·tgt 포함)
+const routePipe = (sx, sy, srcPos, tx, ty, tgtPos, storedWp) => {
+  // 수동 waypoints 있으면 그대로 사용
+  if (storedWp && storedWp.length > 0) {
+    return [{ x:sx,y:sy }, ...storedWp, { x:tx,y:ty }];
   }
 
-  // 일반 경우: stub → 중간 꺾임 → stub
-  const mx = (sx2 + tx2) / 2;
-  const my = (sy2 + ty2) / 2;
+  const sv = portVec(srcPos);
+  const tv = portVec(tgtPos);
 
-  // 수평 출발 포트 (right/left)
-  if (so.dy === 0) {
+  // stub 끝점
+  const sx2 = sx + sv.dx * STUB;
+  const sy2 = sy + sv.dy * STUB;
+  const tx2 = tx + tv.dx * STUB;
+  const ty2 = ty + tv.dy * STUB;
+
+  // stub 끝점이 이미 연결 가능한 경우
+  if (Math.abs(sy2 - ty2) < 2 && sv.dy === 0) {
+    // 같은 y, 수평만으로 연결
+    return [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
+  }
+  if (Math.abs(sx2 - tx2) < 2 && sv.dx === 0) {
+    return [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
+  }
+
+  // 일반 경우: stub → 꺾임 → stub
+  if (sv.dy === 0) {
+    // 수평 출발
+    const my = (sy2 + ty2) / 2;
     return [
-      { x: sx2, y: sy2 },
-      { x: sx2, y: my  },
-      { x: tx2, y: my  },
-      { x: tx2, y: ty2 },
+      { x:sx,  y:sy  },
+      { x:sx2, y:sy2 },
+      { x:sx2, y:my  },
+      { x:tx2, y:my  },
+      { x:tx2, y:ty2 },
+      { x:tx,  y:ty  },
+    ];
+  } else {
+    // 수직 출발
+    const mx = (sx2 + tx2) / 2;
+    return [
+      { x:sx,  y:sy  },
+      { x:sx2, y:sy2 },
+      { x:mx,  y:sy2 },
+      { x:mx,  y:ty2 },
+      { x:tx2, y:ty2 },
+      { x:tx,  y:ty  },
     ];
   }
-  // 수직 출발 포트 (top/bottom)
-  return [
-    { x: sx2, y: sy2 },
-    { x: mx,  y: sy2 },
-    { x: mx,  y: ty2 },
-    { x: tx2, y: ty2 },
-  ];
 };
 
-// ── Rounded Elbow SVG path ────────────────────────────────
+// ── Rounded Elbow SVG path ────────────────────────────────────
+// 중복점 제거 → 각 꺾임점에 Q 베지어 적용
 const buildElbowPath = (pts, r = ELBOW_R) => {
-  if (pts.length < 2) return `M ${pts[0]?.x||0} ${pts[0]?.y||0}`;
+  if (!pts || pts.length < 2) return "";
 
-  // 중복 포인트 제거
   const clean = pts.filter((p, i) =>
     i === 0 || Math.hypot(p.x - pts[i-1].x, p.y - pts[i-1].y) > 0.5
   );
   if (clean.length < 2) return "";
 
   let d = `M ${clean[0].x} ${clean[0].y}`;
-
   for (let i = 1; i < clean.length; i++) {
-    const prev = clean[i - 1];
-    const curr = clean[i];
-    const next = clean[i + 1];
-
+    const prev = clean[i-1], curr = clean[i], next = clean[i+1];
     if (!next) {
       d += ` L ${curr.x} ${curr.y}`;
     } else {
-      const dx1 = curr.x - prev.x, dy1 = curr.y - prev.y;
-      const dx2 = next.x - curr.x, dy2 = next.y - curr.y;
-      const len1 = Math.hypot(dx1, dy1) || 1;
-      const len2 = Math.hypot(dx2, dy2) || 1;
-      const rr   = Math.min(r, len1 / 2, len2 / 2);
-
-      const x1 = curr.x - (dx1 / len1) * rr;
-      const y1 = curr.y - (dy1 / len1) * rr;
-      const x2 = curr.x + (dx2 / len2) * rr;
-      const y2 = curr.y + (dy2 / len2) * rr;
-
-      d += ` L ${x1} ${y1} Q ${curr.x} ${curr.y} ${x2} ${y2}`;
+      const dx1 = curr.x-prev.x, dy1 = curr.y-prev.y;
+      const dx2 = next.x-curr.x, dy2 = next.y-curr.y;
+      const l1  = Math.hypot(dx1,dy1)||1, l2 = Math.hypot(dx2,dy2)||1;
+      const rr  = Math.min(r, l1/2, l2/2);
+      d += ` L ${curr.x-(dx1/l1)*rr} ${curr.y-(dy1/l1)*rr}`;
+      d += ` Q ${curr.x} ${curr.y}`;
+      d += ` ${curr.x+(dx2/l2)*rr} ${curr.y+(dy2/l2)*rr}`;
     }
   }
   return d;
 };
 
-// ── PipeEdge ─────────────────────────────────────────────
+// ── 세그먼트 목록 추출 ──────────────────────────────────────
+// [{x1,y1,x2,y2, isHoriz, mx,my}]
+const getSegments = pts => {
+  const segs = [];
+  for (let i = 0; i < pts.length-1; i++) {
+    const a = pts[i], b = pts[i+1];
+    const len = Math.hypot(b.x-a.x, b.y-a.y);
+    segs.push({
+      x1:a.x, y1:a.y, x2:b.x, y2:b.y,
+      isHoriz: Math.abs(a.y-b.y) < 2,
+      mx:(a.x+b.x)/2, my:(a.y+b.y)/2,
+      len,
+    });
+  }
+  return segs;
+};
+
+// ── PipeEdge ─────────────────────────────────────────────────
 const PipeEdge = ({
   id,
   sourceX, sourceY, sourcePosition,
   targetX, targetY, targetPosition,
   data, selected,
 }) => {
+  // 라인 스타일
   const lt        = data?.lineType || "Piping";
   const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
   const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
   const stroke    = selected ? "#f59e0b" : baseColor;
-  const sw        = ls.sw || 1.5;
-  const mkId      = `mk_${id}`;
+  const sw        = ls.sw || 2;
+  const mkId      = `arrow_${id}`;
 
-  // ── 라벨/IC ──────────────────────────────────────────
+  // IC / 라벨 데이터
   const icStatusColor = {
     "OPEN":"#CA8A04","IN PROGRESS":"#2563EB",
     "CLOSED":"#16A34A","OVERDUE":"#DC2626",
   };
   const fluidLabel  = data?.fluidSub || "";
-  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size || "");
-  const pipingLabel = [fluidLabel, sizeLabel].filter(Boolean).join("-");
-  const isSpecial   = lt === "Process Gas" || lt === "Material";
-  const showLabel   = isSpecial ? (data?.lineText || lt) : pipingLabel;
-  const icNo        = data?.ic_no || "";
-  const icStatus    = data?.ic_status || "";
-  const icColor     = icStatusColor[icStatus] || "#64748B";
+  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size||"");
+  const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
+  const isSpecial   = lt==="Process Gas"||lt==="Material";
+  const showLabel   = isSpecial?(data?.lineText||lt):pipingLabel;
+  const icNo        = data?.ic_no    || "";
+  const icStatus    = data?.ic_status|| "";
+  const icColor     = icStatusColor[icStatus]||"#64748B";
 
-  // ── 경로 포인트 계산 ─────────────────────────────────
-  // wps: 저장된 waypoints 또는 자동 라우팅 결과
-  const storedWp = data?.waypoints || [];
-  const wps = storedWp.length > 0
-    ? storedWp
-    : autoRoute(
-        sourceX, sourceY, sourcePosition || "right",
-        targetX, targetY, targetPosition || "left"
-      );
+  // 경로 계산
+  const storedWp = data?.waypoints||[];
+  const pts = routePipe(
+    sourceX, sourceY, sourcePosition||"right",
+    targetX, targetY, targetPosition||"left",
+    storedWp
+  );
+  const path  = buildElbowPath(pts);
+  const segs  = getSegments(pts);
 
-  // pts: 실제 경로 전체 (src + wps + tgt)
-  const pts = [
-    { x: sourceX, y: sourceY },
-    ...wps,
-    { x: targetX, y: targetY },
-  ];
+  // 라벨 위치: 가장 긴 세그먼트 중앙
+  const longest = segs.reduce((a,b)=>b.len>a.len?b:a, segs[0]||{mx:0,my:0,len:0});
 
-  const edgePath = buildElbowPath(pts);
-
-  // ── 라벨 위치: 가장 긴 세그먼트 중앙 ────────────────
-  let bestSeg = 0, bestLen = 0;
-  for (let i = 0; i < pts.length - 1; i++) {
-    const len = Math.hypot(pts[i+1].x - pts[i].x, pts[i+1].y - pts[i].y);
-    if (len > bestLen) { bestLen = len; bestSeg = i; }
-  }
-  const lx  = (pts[bestSeg].x + pts[bestSeg+1].x) / 2;
-  const ly  = (pts[bestSeg].y + pts[bestSeg+1].y) / 2 - 10; // 선 위로 살짝
-  const raw = Math.atan2(
-    pts[bestSeg+1].y - pts[bestSeg].y,
-    pts[bestSeg+1].x - pts[bestSeg].x
-  ) * 180 / Math.PI;
-  const labelAngle = raw > 90 || raw < -90 ? raw + 180 : raw;
-
-  // ── SVG 좌표 변환 ────────────────────────────────────
+  // SVG 좌표 변환
   const toSVG = (svg, ev) => {
     const pt = svg.createSVGPoint();
-    pt.x = ev.clientX; pt.y = ev.clientY;
+    pt.x=ev.clientX; pt.y=ev.clientY;
     return pt.matrixTransform(svg.getScreenCTM().inverse());
   };
 
-  // ── 핸들 드래그 ──────────────────────────────────────
-  const onHandleDrag = useCallback((e, pIdx) => {
+  // ── 세그먼트 핸들 드래그 ───────────────────────────────
+  // 수평 세그먼트: y 이동 (↕)
+  // 수직 세그먼트: x 이동 (↔)
+  const onSegDrag = useCallback((e, segIdx) => {
     e.stopPropagation();
-    const svg = e.target.closest("svg"); if (!svg) return;
-
-    const origSVG = toSVG(svg, e);
-    // 드래그 시작 시점의 wps 스냅샷
-    // (저장된 wps가 없으면 자동 라우팅 결과를 초기값으로)
-    const initWps = storedWp.length > 0
-      ? storedWp.map(p => ({ ...p }))
-      : autoRoute(
-          sourceX, sourceY, sourcePosition || "right",
-          targetX, targetY, targetPosition || "left"
-        ).map(p => ({ ...p }));
+    const svg = e.target.closest("svg"); if(!svg) return;
+    const seg      = segs[segIdx];
+    const origPos  = toSVG(svg, e);
+    // wps 초기화: 현재 pts에서 src·tgt 제외
+    const initWps  = storedWp.length>0
+      ? storedWp.map(p=>({...p}))
+      : pts.slice(1,-1).map(p=>({...p}));
 
     const onMove = mv => {
       const cur = toSVG(svg, mv);
-      const dx  = cur.x - origSVG.x;
-      const dy  = cur.y - origSVG.y;
-      const nw  = initWps.map(p => ({ ...p }));
-
-      // pts 인덱스 → wps 인덱스: wps[i] = pts[i+1]
-      if (pIdx === 0) {
-        // src: stub 첫 꺾임점 y 또는 x 조정
-        if (nw.length > 0) {
-          const isHorizSrc = (sourcePosition === "right" || sourcePosition === "left");
-          if (isHorizSrc) nw[0] = { x: nw[0].x, y: initWps[0].y + dy };
-          else            nw[0] = { x: initWps[0].x + dx, y: nw[0].y };
-        }
-      } else if (pIdx === pts.length - 1) {
-        // tgt: stub 마지막 꺾임점 y 또는 x 조정
-        if (nw.length > 0) {
-          const last = nw.length - 1;
-          const isHorizTgt = (targetPosition === "right" || targetPosition === "left");
-          if (isHorizTgt) nw[last] = { x: nw[last].x, y: initWps[last].y + dy };
-          else            nw[last] = { x: initWps[last].x + dx, y: nw[last].y };
-        }
+      const nw  = initWps.map(p=>({...p}));
+      // segIdx → wps 인덱스: seg i는 pts[i]→pts[i+1]이고 wps=pts.slice(1,-1)
+      // 따라서 wps[segIdx-1]와 wps[segIdx]가 해당 세그먼트 양 끝
+      const wi1 = segIdx-1, wi2 = segIdx;
+      if (seg.isHoriz) {
+        const dy = cur.y - origPos.y;
+        if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], y:initWps[wi1].y+dy};
+        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], y:initWps[wi2]?.y+dy||cur.y};
       } else {
-        // 중간 꺾임점
-        const wi   = pIdx - 1; // pts[pIdx] = wps[wi]
-        const prev = pIdx === 1
-          ? { x: sourceX, y: sourceY }
-          : initWps[wi - 1];
-        const isHoriz = Math.abs(prev.y - initWps[wi].y) < 8;
-
-        if (isHoriz) {
-          // 수평 세그먼트 → x 이동 (수직 구간 좌우)
-          nw[wi] = { x: initWps[wi].x + dx, y: initWps[wi].y };
-          if (wi + 1 < nw.length)
-            nw[wi + 1] = { x: initWps[wi].x + dx, y: nw[wi + 1].y };
-        } else {
-          // 수직 세그먼트 → y 이동 (수평 구간 상하)
-          nw[wi] = { x: initWps[wi].x, y: initWps[wi].y + dy };
-          if (wi - 1 >= 0)
-            nw[wi - 1] = { x: nw[wi - 1].x, y: initWps[wi].y + dy };
-        }
+        const dx = cur.x - origPos.x;
+        if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], x:initWps[wi1].x+dx};
+        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], x:initWps[wi2]?.x+dx||cur.x};
       }
       window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
-        { detail: { id, waypoints: nw } }));
+        {detail:{id, waypoints:nw}}));
     };
-
-    const onUp = () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup",   onUp);
+    const onUp=()=>{
+      window.removeEventListener("mousemove",onMove);
+      window.removeEventListener("mouseup",onUp);
     };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup",   onUp);
-  }, [id, storedWp, pts.length, sourceX, sourceY,
-      sourcePosition, targetX, targetY, targetPosition]);
+    window.addEventListener("mousemove",onMove);
+    window.addEventListener("mouseup",onUp);
+  },[id, segs, storedWp, pts]);
 
-  // ── 선 클릭 → 꺾임점 삽입 ──────────────────────────
-  const onPathClick = useCallback(e => {
-    if (!selected) return;
-    e.stopPropagation();
-    const svg = e.target.closest("svg"); if (!svg) return;
-    const pos = toSVG(svg, e);
-
-    let minD = Infinity, insIdx = 0;
-    for (let i = 0; i < pts.length - 1; i++) {
-      const a = pts[i], b = pts[i + 1];
-      const abx = b.x - a.x, aby = b.y - a.y;
-      const len2 = abx * abx + aby * aby || 1;
-      const t = Math.max(0, Math.min(1,
-        ((pos.x - a.x) * abx + (pos.y - a.y) * aby) / len2));
-      const d = Math.hypot(pos.x - (a.x + t * abx), pos.y - (a.y + t * aby));
-      if (d < minD) { minD = d; insIdx = i; }
-    }
-
-    const a = pts[insIdx], b = pts[insIdx + 1];
-    const isH = Math.abs(a.y - b.y) < 8;
-    const nw  = [...wps];
-    nw.splice(insIdx, 0, isH ? { x: pos.x, y: a.y } : { x: a.x, y: pos.y });
-    window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
-      { detail: { id, waypoints: nw } }));
-  }, [id, selected, wps, pts]);
-
-  // ── 렌더 ────────────────────────────────────────────
   return (
     <g>
       <defs>
-        <marker id={mkId} markerWidth="10" markerHeight="10"
-          refX="9" refY="5" orient="auto" markerUnits="strokeWidth">
-          <polyline points="1,1 9,5 1,9"
-            fill="none" stroke="context-stroke"
-            strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+        {/* 채워진 삼각형 화살표 (첨부: 10×6px) */}
+        <marker id={mkId}
+          markerWidth="10" markerHeight="6"
+          refX="9" refY="3"
+          orient="auto" markerUnits="strokeWidth">
+          <polygon points="0,0 10,3 0,6"
+            fill={stroke} stroke="none"/>
         </marker>
       </defs>
 
       {/* 히트 영역 */}
-      <path d={edgePath} fill="none" stroke="transparent" strokeWidth={16}
-        style={{ cursor: selected ? "crosshair" : "pointer" }}
-        onClick={onPathClick}/>
+      <path d={path} fill="none" stroke="transparent" strokeWidth={16}
+        style={{cursor:"pointer"}}/>
 
       {/* 실제 라인 */}
-      <path d={edgePath} fill="none"
+      <path d={path} fill="none"
         stroke={stroke} strokeWidth={sw}
-        strokeDasharray={ls.dash}
+        strokeDasharray={ls.dash==="none"?"":ls.dash}
         markerEnd={`url(#${mkId})`}
-        style={{ pointerEvents: "none" }}/>
+        style={{pointerEvents:"none"}}/>
 
-      {/* 선택 시 핸들 */}
-      {selected && pts.map((hp, i) => {
-        const isEnd = i === 0 || i === pts.length - 1;
+      {/* 선택 시: 세그먼트 중앙 핸들 (파란 사각형) */}
+      {selected && segs.map((seg, i) => {
+        // 너무 짧은 세그먼트는 핸들 생략
+        if (seg.len < 20) return null;
+        // stub 세그먼트(첫·마지막)는 작게
+        const isStub = i===0||i===segs.length-1;
+        if (isStub) return null;
+        const cursor = seg.isHoriz ? "ns-resize" : "ew-resize";
         return (
-          <g key={i}>
-            <circle cx={hp.x} cy={hp.y}
-              r={isEnd ? 5 : 7}
-              fill={isEnd ? "white" : "#f59e0b"}
-              stroke="#f59e0b" strokeWidth={isEnd ? 2 : 1.5}
-              style={{ cursor: "move", pointerEvents: "all" }}
-              onMouseDown={e => onHandleDrag(e, i)}/>
-            {!isEnd && (
-              <circle cx={hp.x} cy={hp.y} r={7}
-                fill="transparent"
-                style={{ pointerEvents: "all" }}
-                onDoubleClick={e => {
-                  e.stopPropagation();
-                  const nw = wps.filter((_, idx) => idx !== i - 1);
-                  window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
-                    { detail: { id, waypoints: nw } }));
-                }}/>
-            )}
-          </g>
+          <rect key={i}
+            x={seg.mx-5} y={seg.my-5} width={10} height={10}
+            rx={1}
+            fill={selected?"#2563EB":"#3b82f6"}
+            stroke="white" strokeWidth={1.5}
+            style={{cursor, pointerEvents:"all"}}
+            onMouseDown={e=>onSegDrag(e,i)}/>
         );
       })}
 
       {/* 라벨 + IC 배지 */}
-      {(showLabel || icNo) && (
+      {(showLabel||icNo) && longest.len > 30 && (
         <EdgeLabelRenderer>
           <div style={{
-            position: "absolute",
-            transform:
-              `translate(-50%,-50%) translate(${lx}px,${ly}px) rotate(${labelAngle}deg)`,
-            display: "flex", flexDirection: "column",
-            alignItems: "center", gap: 2,
-            pointerEvents: "none",
+            position:"absolute",
+            transform:`translate(-50%,-100%) translate(${longest.mx}px,${longest.my}px)`,
+            display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+            pointerEvents:"none",
           }}>
             {showLabel && (
               <div style={{
-                fontSize: 10, fontWeight: isSpecial ? 700 : 600,
-                background: "rgba(255,255,255,0.93)",
-                padding: "1px 6px", borderRadius: 4,
-                border: `1.5px solid ${baseColor}`, color: baseColor,
-                whiteSpace: "nowrap",
-                boxShadow: "0 1px 3px rgba(0,0,0,0.09)",
+                fontSize:10, fontWeight:isSpecial?700:500,
+                fontFamily:"monospace",
+                background:"rgba(255,255,255,0.95)",
+                padding:"1px 6px", borderRadius:4,
+                border:`1px solid ${baseColor}`,
+                color:baseColor,
+                whiteSpace:"nowrap",
+                boxShadow:"0 1px 3px rgba(0,0,0,0.1)",
               }}>{showLabel}</div>
             )}
             {icNo && (
               <div style={{
-                fontSize: 9, fontWeight: 700,
-                background: icStatus ? icColor : "#64748B",
-                color: "#fff", padding: "0 5px",
-                borderRadius: 3, whiteSpace: "nowrap",
-              }}>{icNo}{icStatus ? ` · ${icStatus}` : ""}</div>
+                fontSize:9,fontWeight:700,
+                background:icStatus?icColor:"#64748B",
+                color:"#fff",padding:"0 5px",
+                borderRadius:3,whiteSpace:"nowrap",
+              }}>{icNo}{icStatus?` · ${icStatus}`:""}</div>
             )}
           </div>
         </EdgeLabelRenderer>
@@ -1572,6 +1517,7 @@ const PipeEdge = ({
     </g>
   );
 };
+
 // ─────────────────────────────────────────────────────────────
 // TYPE MAPS
 // ─────────────────────────────────────────────────────────────
