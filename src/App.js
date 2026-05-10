@@ -1254,56 +1254,92 @@ const portVec = pos => {
   return { dx: 1, dy: 0 };
 };
 
+// ── 경로 정규화 ───────────────────────────────────────────────
+// 두 가지 처리:
+//  1) 스냅: 거의 같은 x 또는 y 좌표(≤ SNAP_TOL)를 정확히 일치시킴
+//  2) 병합: 연속된 같은 방향 세그먼트의 중간 waypoint 제거
+const SNAP_TOL = 8; // px — 이 이내면 동일 좌표로 정렬
+
+const normalizePath = (pts) => {
+  if (!pts || pts.length < 2) return pts;
+
+  // Step 1: 이웃한 포인트끼리 x/y 오차가 SNAP_TOL 이하면 정렬
+  // 직전 세그먼트의 방향에 따라 수직 좌표만 맞춤
+  const snapped = pts.map((p, i) => ({ ...p }));
+  for (let i = 1; i < snapped.length; i++) {
+    const prev = snapped[i - 1];
+    const curr = snapped[i];
+    // 수평으로 이동하려는 세그먼트: y가 거의 같으면 prev.y로 맞춤
+    if (Math.abs(curr.y - prev.y) <= SNAP_TOL && Math.abs(curr.x - prev.x) > SNAP_TOL) {
+      snapped[i] = { x: curr.x, y: prev.y };
+    }
+    // 수직으로 이동하려는 세그먼트: x가 거의 같으면 prev.x로 맞춤
+    if (Math.abs(curr.x - prev.x) <= SNAP_TOL && Math.abs(curr.y - prev.y) > SNAP_TOL) {
+      snapped[i] = { x: prev.x, y: curr.y };
+    }
+  }
+
+  // Step 2: 완전히 중복된 점 제거
+  const deduped = snapped.filter((p, i) =>
+    i === 0 || Math.hypot(p.x - snapped[i-1].x, p.y - snapped[i-1].y) > 0.5
+  );
+
+  // Step 3: 세 점이 일직선(같은 x 또는 같은 y 연속)이면 중간 점 제거
+  // 예) (100,50) → (100,50) → (200,50) : 세 점이 수평 → 중간 제거
+  let merged = [deduped[0]];
+  for (let i = 1; i < deduped.length - 1; i++) {
+    const prev = merged[merged.length - 1];
+    const curr = deduped[i];
+    const next = deduped[i + 1];
+    // prev→curr와 curr→next가 같은 방향이면 curr는 불필요
+    const sameDirX = Math.abs(prev.y - curr.y) < 0.5 && Math.abs(curr.y - next.y) < 0.5;
+    const sameDirY = Math.abs(prev.x - curr.x) < 0.5 && Math.abs(curr.x - next.x) < 0.5;
+    if (!sameDirX && !sameDirY) {
+      merged.push(curr);
+    }
+  }
+  merged.push(deduped[deduped.length - 1]);
+
+  return merged;
+};
+
 // ── 포트방향 인식 직각 라우팅 ────────────────────────────────
 // 반환: pts 전체 [{x,y},...] (src·tgt 포함)
 const routePipe = (sx, sy, srcPos, tx, ty, tgtPos, storedWp) => {
-  // 수동 waypoints 있으면 그대로 사용
+  // 수동 waypoints 있으면 정규화 후 사용
   if (storedWp && storedWp.length > 0) {
-    return [{ x:sx,y:sy }, ...storedWp, { x:tx,y:ty }];
+    return normalizePath([{ x:sx,y:sy }, ...storedWp, { x:tx,y:ty }]);
   }
 
   const sv = portVec(srcPos);
   const tv = portVec(tgtPos);
 
-  // stub 끝점
   const sx2 = sx + sv.dx * STUB;
   const sy2 = sy + sv.dy * STUB;
   const tx2 = tx + tv.dx * STUB;
   const ty2 = ty + tv.dy * STUB;
 
-  // stub 끝점이 이미 연결 가능한 경우
+  let raw;
   if (Math.abs(sy2 - ty2) < 2 && sv.dy === 0) {
-    // 같은 y, 수평만으로 연결
-    return [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
-  }
-  if (Math.abs(sx2 - tx2) < 2 && sv.dx === 0) {
-    return [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
-  }
-
-  // 일반 경우: stub → 꺾임 → stub
-  if (sv.dy === 0) {
-    // 수평 출발
+    raw = [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
+  } else if (Math.abs(sx2 - tx2) < 2 && sv.dx === 0) {
+    raw = [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
+  } else if (sv.dy === 0) {
     const my = (sy2 + ty2) / 2;
-    return [
-      { x:sx,  y:sy  },
-      { x:sx2, y:sy2 },
-      { x:sx2, y:my  },
-      { x:tx2, y:my  },
-      { x:tx2, y:ty2 },
-      { x:tx,  y:ty  },
+    raw = [
+      { x:sx,  y:sy  }, { x:sx2, y:sy2 },
+      { x:sx2, y:my  }, { x:tx2, y:my  },
+      { x:tx2, y:ty2 }, { x:tx,  y:ty  },
     ];
   } else {
-    // 수직 출발
     const mx = (sx2 + tx2) / 2;
-    return [
-      { x:sx,  y:sy  },
-      { x:sx2, y:sy2 },
-      { x:mx,  y:sy2 },
-      { x:mx,  y:ty2 },
-      { x:tx2, y:ty2 },
-      { x:tx,  y:ty  },
+    raw = [
+      { x:sx,  y:sy  }, { x:sx2, y:sy2 },
+      { x:mx,  y:sy2 }, { x:mx,  y:ty2 },
+      { x:tx2, y:ty2 }, { x:tx,  y:ty  },
     ];
   }
+  return normalizePath(raw);
 };
 
 // ── Rounded Elbow SVG path ────────────────────────────────────
@@ -1416,20 +1452,21 @@ const PipeEdge = ({
     const onMove = mv => {
       const cur = toSVG(svg, mv);
       const nw  = initWps.map(p=>({...p}));
-      // segIdx → wps 인덱스: seg i는 pts[i]→pts[i+1]이고 wps=pts.slice(1,-1)
-      // 따라서 wps[segIdx-1]와 wps[segIdx]가 해당 세그먼트 양 끝
       const wi1 = segIdx-1, wi2 = segIdx;
       if (seg.isHoriz) {
         const dy = cur.y - origPos.y;
         if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], y:initWps[wi1].y+dy};
-        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], y:initWps[wi2]?.y+dy||cur.y};
+        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], y:(initWps[wi2]?.y??cur.y)+dy};
       } else {
         const dx = cur.x - origPos.x;
         if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], x:initWps[wi1].x+dx};
-        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], x:initWps[wi2]?.x+dx||cur.x};
+        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], x:(initWps[wi2]?.x??cur.x)+dx};
       }
+      // 정규화: 거의 일직선인 꺾임 제거
+      const allPts  = normalizePath([{x:sourceX,y:sourceY},...nw,{x:targetX,y:targetY}]);
+      const cleanWp = allPts.slice(1,-1);
       window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
-        {detail:{id, waypoints:nw}}));
+        {detail:{id, waypoints:cleanWp}}));
     };
     const onUp=()=>{
       window.removeEventListener("mousemove",onMove);
@@ -1437,7 +1474,7 @@ const PipeEdge = ({
     };
     window.addEventListener("mousemove",onMove);
     window.addEventListener("mouseup",onUp);
-  },[id, segs, storedWp, pts]);
+  },[id, segs, storedWp, pts, sourceX, sourceY, targetX, targetY]);
 
   return (
     <g>
@@ -2184,11 +2221,13 @@ const CanvasInner = () => {
         if(toggleIO!==undefined) return { ...n,data:{ ...n.data,showIO:toggleIO } };
         return n;
       }));
-      // waypoint → edge 업데이트
+      // waypoint → edge 업데이트 (정규화 적용)
       if(waypoints!==undefined){
-        setEdges(es=>es.map(e=>
-          e.id===id ? { ...e, data:{ ...e.data, waypoints } } : e
-        ));
+        setEdges(es=>es.map(e=>{
+          if(e.id!==id) return e;
+          // 전체 pts 기준으로 정규화
+          return { ...e, data:{ ...e.data, waypoints } };
+        }));
       }
     };
     window.addEventListener("mbse:updatelabel",fn);
