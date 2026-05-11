@@ -1240,8 +1240,8 @@ const InstrumentNode = memo(({ data, selected }) => (
 //  ⑤ 라벨: 가장 긴 세그먼트 중앙
 // ═══════════════════════════════════════════════════════════════
 
-const ELBOW_R = 6;   // 꺾임 반경 (첨부: 6px)
-const STUB    = 30;  // 포트 이탈 최소 거리
+const ELBOW_R = 4;   // 꺾임 반경 줄임 (기존 6→4)
+const STUB    = 16;  // 포트 이탈 거리 줄임 (기존 30→16)
 
 // ── 포트 방향 → 이탈 벡터 ────────────────────────────────────
 const portVec = pos => {
@@ -1301,42 +1301,100 @@ const normalizePath = (pts) => {
   return merged;
 };
 
-// ── 포트방향 인식 직각 라우팅 ────────────────────────────────
-// 반환: pts 전체 [{x,y},...] (src·tgt 포함)
+// ── 포트방향 인식 직각 라우팅 (개선) ─────────────────────────
+// 핵심 개선:
+//  ① stub 길이를 거리에 비례해서 동적 계산 → 교차 방지
+//  ② 반대 방향 포트(left↔right, top↔bottom) 직결 최적화
+//  ③ 같은 방향 포트(right→right 등) U턴 처리
 const routePipe = (sx, sy, srcPos, tx, ty, tgtPos, storedWp) => {
-  // 수동 waypoints 있으면 정규화 후 사용
   if (storedWp && storedWp.length > 0) {
     return normalizePath([{ x:sx,y:sy }, ...storedWp, { x:tx,y:ty }]);
   }
 
-  const sv = portVec(srcPos);
-  const tv = portVec(tgtPos);
+  const sv   = portVec(srcPos);
+  const tv   = portVec(tgtPos);
 
-  const sx2 = sx + sv.dx * STUB;
-  const sy2 = sy + sv.dy * STUB;
-  const tx2 = tx + tv.dx * STUB;
-  const ty2 = ty + tv.dy * STUB;
+  // 두 포트 간 거리에 비례한 stub 계산
+  const dist = Math.hypot(tx-sx, ty-sy);
+  const stub = Math.max(8, Math.min(STUB, dist * 0.18));
+
+  const sx2  = sx + sv.dx * stub;
+  const sy2  = sy + sv.dy * stub;
+  const tx2  = tx + tv.dx * stub;
+  const ty2  = ty + tv.dy * stub;
 
   let raw;
-  if (Math.abs(sy2 - ty2) < 2 && sv.dy === 0) {
-    raw = [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
-  } else if (Math.abs(sx2 - tx2) < 2 && sv.dx === 0) {
-    raw = [{ x:sx,y:sy }, { x:sx2,y:sy2 }, { x:tx2,y:ty2 }, { x:tx,y:ty }];
-  } else if (sv.dy === 0) {
-    const my = (sy2 + ty2) / 2;
+
+  // ── 케이스 1: 수평 출발·수평 도착 (right→left / left→right) ──
+  if (sv.dy === 0 && tv.dy === 0) {
+    if (Math.abs(sy - ty) < 2) {
+      // 같은 y → 단순 수평 직선
+      raw = [{ x:sx,y:sy }, { x:tx,y:ty }];
+    } else if ((sv.dx > 0 && tx > sx) || (sv.dx < 0 && tx < sx)) {
+      // 반대 방향 → 가운데에서 수직 연결
+      const mx2 = (sx2 + tx2) / 2;
+      raw = [
+        { x:sx,  y:sy  },
+        { x:mx2, y:sy  },
+        { x:mx2, y:ty  },
+        { x:tx,  y:ty  },
+      ];
+    } else {
+      // U턴 (같은 방향 포트)
+      const ux = sv.dx > 0
+        ? Math.max(sx2, tx2) + stub
+        : Math.min(sx2, tx2) - stub;
+      raw = [
+        { x:sx,  y:sy  },
+        { x:ux,  y:sy  },
+        { x:ux,  y:ty  },
+        { x:tx,  y:ty  },
+      ];
+    }
+  }
+  // ── 케이스 2: 수직 출발·수직 도착 (bottom→top / top→bottom) ──
+  else if (sv.dx === 0 && tv.dx === 0) {
+    if (Math.abs(sx - tx) < 2) {
+      raw = [{ x:sx,y:sy }, { x:tx,y:ty }];
+    } else if ((sv.dy > 0 && ty > sy) || (sv.dy < 0 && ty < sy)) {
+      const my2 = (sy2 + ty2) / 2;
+      raw = [
+        { x:sx,  y:sy  },
+        { x:sx,  y:my2 },
+        { x:tx,  y:my2 },
+        { x:tx,  y:ty  },
+      ];
+    } else {
+      const uy = sv.dy > 0
+        ? Math.max(sy2, ty2) + stub
+        : Math.min(sy2, ty2) - stub;
+      raw = [
+        { x:sx,  y:sy  },
+        { x:sx,  y:uy  },
+        { x:tx,  y:uy  },
+        { x:tx,  y:ty  },
+      ];
+    }
+  }
+  // ── 케이스 3: 수평 출발·수직 도착 (right/left → top/bottom) ──
+  else if (sv.dy === 0 && tv.dx === 0) {
+    // src에서 수평으로 tx까지, 그 다음 수직으로 ty까지
     raw = [
-      { x:sx,  y:sy  }, { x:sx2, y:sy2 },
-      { x:sx2, y:my  }, { x:tx2, y:my  },
-      { x:tx2, y:ty2 }, { x:tx,  y:ty  },
-    ];
-  } else {
-    const mx = (sx2 + tx2) / 2;
-    raw = [
-      { x:sx,  y:sy  }, { x:sx2, y:sy2 },
-      { x:mx,  y:sy2 }, { x:mx,  y:ty2 },
-      { x:tx2, y:ty2 }, { x:tx,  y:ty  },
+      { x:sx,  y:sy  },
+      { x:tx,  y:sy  },
+      { x:tx,  y:ty  },
     ];
   }
+  // ── 케이스 4: 수직 출발·수평 도착 (top/bottom → right/left) ──
+  else {
+    // src에서 수직으로 ty까지, 그 다음 수평으로 tx까지
+    raw = [
+      { x:sx,  y:sy  },
+      { x:sx,  y:ty  },
+      { x:tx,  y:ty  },
+    ];
+  }
+
   return normalizePath(raw);
 };
 
@@ -1424,6 +1482,11 @@ const PipeEdge = ({
   const path  = buildElbowPath(pts);
   const segs  = getSegments(pts);
 
+  // 전체 라인 길이 계산 → 화살표 크기 동적 조정
+  const totalLen = segs.reduce((s,g)=>s+g.len, 0);
+  // 짧은 선일수록 화살표 작게 (최소 4, 최대 8, strokeWidth 기준)
+  const arrowScale = totalLen < 40 ? 4 : totalLen < 80 ? 5 : 7;
+
   // 라벨 위치: 가장 긴 세그먼트 중앙
   const longest = segs.reduce((a,b)=>b.len>a.len?b:a, segs[0]||{mx:0,my:0,len:0});
 
@@ -1477,21 +1540,23 @@ const PipeEdge = ({
   return (
     <g>
       <defs>
-        {/* 끝점 화살표 — 채워진 삼각형 */}
+        {/* 끝점 화살표 — 라인 길이에 비례한 크기 */}
         <marker id={mkId}
-          markerWidth="10" markerHeight="6"
-          refX="9" refY="3"
+          markerWidth={arrowScale} markerHeight={arrowScale*0.6}
+          refX={arrowScale-0.5} refY={arrowScale*0.3}
           orient="auto" markerUnits="strokeWidth">
-          <polygon points="0,0 10,3 0,6"
+          <polygon
+            points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
             fill={stroke} stroke="none"/>
         </marker>
-        {/* 시작점 화살표 — 양방향일 때 사용 */}
+        {/* 시작점 화살표 (양방향) */}
         {ls.bidir && (
           <marker id={`${mkId}_start`}
-            markerWidth="10" markerHeight="6"
-            refX="1" refY="3"
+            markerWidth={arrowScale} markerHeight={arrowScale*0.6}
+            refX={0.5} refY={arrowScale*0.3}
             orient="auto-start-reverse" markerUnits="strokeWidth">
-            <polygon points="0,0 10,3 0,6"
+            <polygon
+              points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
               fill={stroke} stroke="none"/>
           </marker>
         )}
