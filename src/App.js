@@ -817,20 +817,18 @@ const EQUIPMENT_ME = [
 const EQUIPMENT_LIST = [...EQUIPMENT_UT, ...EQUIPMENT_ME];
 
 // ── Connection 타입 ──────────────────────────────────────────
-// Piping / Duct / Brench : 기존
-// Process Gas            : 굵은 보라색 선, 텍스트 라벨 지원
-// Material               : 굵은 갈색 선, 텍스트 라벨 지원
-const CONNECTION_LIST = ["Piping","Duct","Brench","Process Gas","Material"];
+const CONNECTION_LIST = ["Piping","Piping (↔)","Duct","Brench","Process Gas","Material"];
 const CONVEYOR_LIST   = ["Conveyor"];
 
 // 라인 스타일 정의
 const LINE_STYLE = {
-  Piping:      { color:"#94a3b8", sw:2,   dash:"none"  },
-  Duct:        { color:"#475569", sw:4,   dash:"none"  },
-  Brench:      { color:"#94a3b8", sw:1.5, dash:"none"  },
-  "Process Gas":{ color:"#7c3aed", sw:5,  dash:"none"  },
-  Material:    { color:"#92400e", sw:5,   dash:"none"  },
-  Conveyor:    { color:"#78350f", sw:2,   dash:"7,3"   },
+  Piping:          { color:"#94a3b8", sw:2,   dash:"none", bidir:false },
+  "Piping (↔)":   { color:"#94a3b8", sw:2,   dash:"none", bidir:true  },
+  Duct:            { color:"#475569", sw:4,   dash:"none", bidir:false },
+  Brench:          { color:"#94a3b8", sw:1.5, dash:"none", bidir:false },
+  "Process Gas":   { color:"#7c3aed", sw:5,   dash:"none", bidir:false },
+  Material:        { color:"#92400e", sw:5,   dash:"none", bidir:false },
+  Conveyor:        { color:"#78350f", sw:2,   dash:"7,3",  bidir:false },
 };
 
 const INSTRUMENT_CATS = { Flow:[], Pressure:[], Temperature:[], Level:[] };
@@ -1479,7 +1477,7 @@ const PipeEdge = ({
   return (
     <g>
       <defs>
-        {/* 채워진 삼각형 화살표 (첨부: 10×6px) */}
+        {/* 끝점 화살표 — 채워진 삼각형 */}
         <marker id={mkId}
           markerWidth="10" markerHeight="6"
           refX="9" refY="3"
@@ -1487,6 +1485,16 @@ const PipeEdge = ({
           <polygon points="0,0 10,3 0,6"
             fill={stroke} stroke="none"/>
         </marker>
+        {/* 시작점 화살표 — 양방향일 때 사용 */}
+        {ls.bidir && (
+          <marker id={`${mkId}_start`}
+            markerWidth="10" markerHeight="6"
+            refX="1" refY="3"
+            orient="auto-start-reverse" markerUnits="strokeWidth">
+            <polygon points="0,0 10,3 0,6"
+              fill={stroke} stroke="none"/>
+          </marker>
+        )}
       </defs>
 
       {/* 히트 영역 */}
@@ -1498,6 +1506,7 @@ const PipeEdge = ({
         stroke={stroke} strokeWidth={sw}
         strokeDasharray={ls.dash==="none"?"":ls.dash}
         markerEnd={`url(#${mkId})`}
+        markerStart={ls.bidir ? `url(#${mkId}_start)` : undefined}
         style={{pointerEvents:"none"}}/>
 
       {/* 선택 시: 세그먼트 중앙 핸들 (파란 사각형) */}
@@ -1556,7 +1565,49 @@ const PipeEdge = ({
 };
 
 // ─────────────────────────────────────────────────────────────
-// TYPE MAPS
+// SMART GUIDE — 노드 드래그 시 정렬 가상선 + 자동 스냅
+// PPT처럼 다른 노드와 left/center/right/top/middle/bottom 정렬
+// ─────────────────────────────────────────────────────────────
+const GUIDE_TOL  = 8;   // px — 이 거리 이내면 스냅 발동
+const GUIDE_COLOR = "#e11d48"; // 가상선 색상 (빨강)
+
+// 노드의 정렬 기준점 추출 (6개: left,centerX,right,top,middleY,bottom)
+const getNodeAnchors = (node) => {
+  const x = node.position?.x ?? 0;
+  const y = node.position?.y ?? 0;
+  const w = node.width  ?? node.style?.width  ?? 120;
+  const h = node.height ?? node.style?.height ?? 60;
+  return {
+    left:    x,
+    centerX: x + w / 2,
+    right:   x + w,
+    top:     y,
+    middleY: y + h / 2,
+    bottom:  y + h,
+    w, h,
+  };
+};
+
+const SmartGuide = memo(({ guides }) => {
+  if (!guides || guides.length === 0) return null;
+  return (
+    <svg style={{
+      position:"absolute", inset:0,
+      width:"100%", height:"100%",
+      pointerEvents:"none", zIndex:9998,
+      overflow:"visible",
+    }}>
+      {guides.map((g, i) => (
+        <line key={i}
+          x1={g.x1} y1={g.y1} x2={g.x2} y2={g.y2}
+          stroke={GUIDE_COLOR}
+          strokeWidth={1}
+          strokeDasharray="4 3"
+          opacity={0.85}/>
+      ))}
+    </svg>
+  );
+});
 // ─────────────────────────────────────────────────────────────
 const nodeTypes = { area:AreaNode, equipment:EquipmentNode, instrument:InstrumentNode, brench:BrenchNode };
 const edgeTypes = { pipe:PipeEdge };
@@ -1581,7 +1632,13 @@ const Sidebar = memo(({ onDragStart }) => {
   // 라인 미리보기 색/굵기
   const linePreview=(lt)=>{
     const ls=LINE_STYLE[lt]||LINE_STYLE.Piping;
-    return <span style={{ display:"inline-block",width:28,height:ls.sw>3?ls.sw:2,background:ls.color,borderRadius:2,flexShrink:0,verticalAlign:"middle",marginRight:4 }}/>;
+    return (
+      <span style={{ display:"inline-flex",alignItems:"center",gap:1,flexShrink:0,marginRight:4 }}>
+        {ls.bidir && <span style={{ color:ls.color,fontSize:9,lineHeight:1 }}>◀</span>}
+        <span style={{ display:"inline-block",width:24,height:Math.min(ls.sw,3),background:ls.color,borderRadius:1 }}/>
+        <span style={{ color:ls.color,fontSize:9,lineHeight:1 }}>▶</span>
+      </span>
+    );
   };
 
   return (
@@ -2082,6 +2139,7 @@ const CanvasInner = () => {
   const [sel,setSel]       = useState(null);
   const [modal,setModal]   = useState(false);
   const [modalDefault,setModalDefault] = useState("Piping");
+  const [guides,setGuides] = useState([]); // Smart Guide 가상선
   const connRef     = useRef(null);
   const fileRef     = useRef(null);
   const xlsxRef     = useRef(null);
@@ -2330,6 +2388,83 @@ const CanvasInner = () => {
   const onEdgeClick=useCallback((_,e)=>setSel(e),[]);
   const onPaneClick=useCallback(()=>setSel(null),[]);
 
+  // ── Smart Guide: 드래그 중 정렬선 계산 + 스냅 ──────────────
+  const onNodeDrag = useCallback((_evt, dragNode) => {
+    const others = nodes.filter(n => n.id !== dragNode.id && n.type !== "area");
+    if (others.length === 0) { setGuides([]); return; }
+
+    const da = getNodeAnchors(dragNode);
+    const newGuides = [];
+    let snapX = null, snapY = null;
+
+    others.forEach(other => {
+      const oa = getNodeAnchors(other);
+      const canvasW = 16000, canvasH = 16000;
+
+      // ── 수직 정렬 (x 기준) ──────────────────────────────
+      const xPairs = [
+        [da.left,    oa.left,    "left-left"],
+        [da.left,    oa.centerX, "left-center"],
+        [da.left,    oa.right,   "left-right"],
+        [da.centerX, oa.left,    "center-left"],
+        [da.centerX, oa.centerX, "center-center"],
+        [da.centerX, oa.right,   "center-right"],
+        [da.right,   oa.left,    "right-left"],
+        [da.right,   oa.centerX, "right-center"],
+        [da.right,   oa.right,   "right-right"],
+      ];
+      xPairs.forEach(([dv, ov]) => {
+        if (Math.abs(dv - ov) <= GUIDE_TOL) {
+          if (snapX === null) snapX = ov - (dv - da.left) ; // 보정값
+          newGuides.push({
+            x1: ov, y1: 0, x2: ov, y2: canvasH,
+          });
+        }
+      });
+
+      // ── 수평 정렬 (y 기준) ──────────────────────────────
+      const yPairs = [
+        [da.top,     oa.top,     "top-top"],
+        [da.top,     oa.middleY, "top-middle"],
+        [da.top,     oa.bottom,  "top-bottom"],
+        [da.middleY, oa.top,     "middle-top"],
+        [da.middleY, oa.middleY, "middle-middle"],
+        [da.middleY, oa.bottom,  "middle-bottom"],
+        [da.bottom,  oa.top,     "bottom-top"],
+        [da.bottom,  oa.middleY, "bottom-middle"],
+        [da.bottom,  oa.bottom,  "bottom-bottom"],
+      ];
+      yPairs.forEach(([dv, ov]) => {
+        if (Math.abs(dv - ov) <= GUIDE_TOL) {
+          if (snapY === null) snapY = ov - (dv - da.top);
+          newGuides.push({
+            x1: 0, y1: ov, x2: canvasW, y2: ov,
+          });
+        }
+      });
+    });
+
+    setGuides(newGuides);
+
+    // 스냅 적용
+    if (snapX !== null || snapY !== null) {
+      setNodes(ns => ns.map(n => {
+        if (n.id !== dragNode.id) return n;
+        return {
+          ...n,
+          position: {
+            x: snapX !== null ? snapX : n.position.x,
+            y: snapY !== null ? snapY : n.position.y,
+          }
+        };
+      }));
+    }
+  }, [nodes, setNodes]);
+
+  const onNodeDragStop = useCallback(() => {
+    setGuides([]); // 드래그 끝나면 가이드 제거
+  }, []);
+
   const onUpdateNode=useCallback((id,newData)=>{
     setNodes(ns=>ns.map(n=>n.id===id?{...n,data:newData}:n));
     setSel(prev=>prev&&prev.id===id?{...prev,data:newData}:prev);
@@ -2497,6 +2632,8 @@ const CanvasInner = () => {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
+              onNodeDrag={onNodeDrag}
+              onNodeDragStop={onNodeDragStop}
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
               connectionLineType="straight"
@@ -2523,6 +2660,12 @@ const CanvasInner = () => {
               <Controls/>
               <MiniMap nodeColor={n=>n.type==="instrument"?"#a855f7":n.type==="area"?"#93c5fd":"#3b82f6"} maskColor="rgba(0,0,0,0.04)"/>
               <Background variant="dots" gap={20} size={1} color="#cbd5e1"/>
+              {/* Smart Guide 가상선 오버레이 */}
+              {guides.length > 0 && (
+                <Panel position="top-left" style={{margin:0,padding:0,pointerEvents:"none",width:"100%",height:"100%"}}>
+                  <SmartGuide guides={guides}/>
+                </Panel>
+              )}
               <Panel position="bottom-left">
                 <div style={{ background:"rgba(255,255,255,0.92)",border:"1px solid #e2e8f0",borderRadius:7,padding:"5px 10px",fontSize:10,color:"#64748b" }}>
                   드래그 → 범위선택 · Shift+클릭 → 추가선택 · Ctrl+Z 되돌리기 · Ctrl+C/V 복사붙여넣기 · Del 삭제
