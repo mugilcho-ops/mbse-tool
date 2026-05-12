@@ -1020,7 +1020,12 @@ const AreaNode = memo(({ id, data, selected }) => {
       borderRadius:10, width:"100%", height:"100%",
       position:"relative", boxSizing:"border-box", overflow:"hidden",
     }}>
-      <NodeResizer minWidth={180} minHeight={120} isVisible={selected}/>
+      <NodeResizer
+        minWidth={180} minHeight={120}
+        isVisible={selected}
+        lineStyle={{ border:"2px dashed #f59e0b" }}
+        handleStyle={{ width:14, height:14, background:"#f59e0b", border:"2px solid #fff", borderRadius:3 }}
+      />
 
       {/* Handles — Area 경계에 표시 */}
       {handleList.map(({dir,pid,pct})=>(
@@ -1043,8 +1048,16 @@ const AreaNode = memo(({ id, data, selected }) => {
               onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
               onClick={e=>e.stopPropagation()} style={{ color:c.label }}/>
           ) : (
-            <span style={{ fontSize:30,fontWeight:800,color:c.label,lineHeight:1.2 }}>
-              [{data.areaType}]{data.label?` ${data.label}`:" (더블클릭으로 편집)"}
+            <span style={{
+              fontSize: data.areaType==="Plant" ? 30
+                      : data.areaType==="System"  ? 15
+                      : data.areaType==="Package" ? 15
+                      : 20,  // Item
+              fontWeight:800, color:c.label, lineHeight:1.2,
+            }}>
+              {/* Plant/System/Package 는 태그 미표시, Item만 표시 */}
+              {data.areaType==="Item" ? `[Item] ` : ""}
+              {data.label || <span style={{ opacity:0.4, fontSize:"0.7em" }}>(더블클릭 편집)</span>}
             </span>
           )}
         </div>
@@ -1198,11 +1211,21 @@ const EquipmentNode = memo(({ id, data, selected }) => {
 // ─────────────────────────────────────────────────────────────
 // BRENCH NODE
 // ─────────────────────────────────────────────────────────────
-const BrenchNode = memo(({ data, selected }) => (
-  <div style={{ width:18,height:18,borderRadius:"50%",background:selected?"#f59e0b":"#334155",border:`2px solid ${selected?"#b45309":"#1e293b"}`,position:"relative" }}>
+const BrenchNode = memo(({ id, data, selected }) => (
+  <div style={{
+    width:24, height:24, borderRadius:"50%",
+    background: selected ? "#f59e0b" : "#334155",
+    border:`2.5px solid ${selected?"#b45309":"#94a3b8"}`,
+    position:"relative", cursor:"move",
+    boxShadow: selected ? "0 0 0 3px rgba(245,158,11,0.3)" : "0 2px 6px rgba(0,0,0,0.25)",
+    display:"flex", alignItems:"center", justifyContent:"center",
+  }}>
+    {/* 중앙 십자 표시 */}
+    <div style={{ width:10,height:2,background:"rgba(255,255,255,0.7)",position:"absolute" }}/>
+    <div style={{ width:2,height:10,background:"rgba(255,255,255,0.7)",position:"absolute" }}/>
     {DIRS.map(pos=>(
       <Handle key={pos} type="source" position={pos} id={DIR_ID[pos]}
-        style={{ width:7,height:7,borderRadius:"50%",background:"#94a3b8",border:"1px solid #fff" }}/>
+        style={{ width:8,height:8,borderRadius:"50%",background:"#0d9488",border:"2px solid #fff",zIndex:10 }}/>
     ))}
   </div>
 ));
@@ -1448,8 +1471,12 @@ const PipeEdge = ({
   id,
   sourceX, sourceY, sourcePosition,
   targetX, targetY, targetPosition,
+  source, target,
   data, selected,
 }) => {
+  // getNodes로 모든 노드 bbox 참조 (장애물 회피용)
+  const { getNodes } = useReactFlow();
+
   // 라인 스타일
   const lt        = data?.lineType || "Piping";
   const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
@@ -1472,15 +1499,90 @@ const PipeEdge = ({
   const icStatus    = data?.ic_status|| "";
   const icColor     = icStatusColor[icStatus]||"#64748B";
 
-  // 경로 계산
+  // ── 장애물(Equipment) bbox 수집 ─────────────────────────
+  // Area는 통과 허용, equipment/instrument/brench는 회피
+  const allNodes = getNodes();
+  const obstacles = allNodes
+    .filter(n => n.id !== source && n.id !== target
+              && n.type !== "area")
+    .map(n => ({
+      x1: (n.position?.x||0) - 10,
+      y1: (n.position?.y||0) - 10,
+      x2: (n.position?.x||0) + (n.width||120) + 10,
+      y2: (n.position?.y||0) + (n.height||60) + 10,
+    }));
+
+  // ── 선분이 장애물과 교차하는지 검사 ──────────────────────
+  const segIntersectsBox = (x1,y1,x2,y2, box) => {
+    // 선분 bbox와 box 겹침 확인 (빠른 판별)
+    const minX=Math.min(x1,x2), maxX=Math.max(x1,x2);
+    const minY=Math.min(y1,y2), maxY=Math.max(y1,y2);
+    return !(maxX < box.x1 || minX > box.x2 || maxY < box.y1 || minY > box.y2);
+  };
+
+  // ── 장애물 회피 경로 보정 ─────────────────────────────────
+  // 자동 라우팅 결과의 각 세그먼트를 검사하여
+  // 충돌 시 우회 경유점을 삽입
+  const avoidObstacles = (pts) => {
+    if (obstacles.length === 0) return pts;
+    let result = [...pts];
+    let maxIter = 4; // 최대 반복 횟수
+    while (maxIter-- > 0) {
+      let changed = false;
+      const next = [result[0]];
+      for (let i = 0; i < result.length - 1; i++) {
+        const a = result[i], b = result[i+1];
+        const isH = Math.abs(a.y - b.y) < 2; // 수평 세그먼트
+        let hit = null;
+        for (const box of obstacles) {
+          if (segIntersectsBox(a.x, a.y, b.x, b.y, box)) {
+            hit = box; break;
+          }
+        }
+        if (hit) {
+          changed = true;
+          if (isH) {
+            // 수평 세그먼트가 박스와 충돌 → 위 또는 아래로 우회
+            const margin = 20;
+            // 위/아래 중 더 여유있는 방향
+            const aboveY = hit.y1 - margin;
+            const belowY = hit.y2 + margin;
+            const midX   = (a.x + b.x) / 2;
+            const byY    = Math.abs(a.y - aboveY) < Math.abs(a.y - belowY)
+                           ? aboveY : belowY;
+            next.push({ x:a.x,  y:byY },
+                       { x:b.x,  y:byY });
+          } else {
+            // 수직 세그먼트가 박스와 충돌 → 왼쪽 또는 오른쪽 우회
+            const margin = 20;
+            const leftX  = hit.x1 - margin;
+            const rightX = hit.x2 + margin;
+            const byX    = Math.abs(a.x - leftX) < Math.abs(a.x - rightX)
+                           ? leftX : rightX;
+            next.push({ x:byX, y:a.y },
+                       { x:byX, y:b.y });
+          }
+        } else {
+          next.push(b);
+        }
+      }
+      if (!changed) break;
+      result = normalizePath(next);
+    }
+    return result;
+  };
+
+  // ── 경로 계산 ────────────────────────────────────────────
   const storedWp = data?.waypoints||[];
-  const pts = routePipe(
+  const rawPts = routePipe(
     sourceX, sourceY, sourcePosition||"right",
     targetX, targetY, targetPosition||"left",
     storedWp
   );
-  const path  = buildElbowPath(pts);
-  const segs  = getSegments(pts);
+  // storedWp 없을 때만 장애물 회피 적용
+  const pts  = storedWp.length > 0 ? rawPts : avoidObstacles(rawPts);
+  const path = buildElbowPath(pts);
+  const segs = getSegments(pts);
 
   // 전체 라인 길이 계산 → 화살표 크기 동적 조정
   const totalLen = segs.reduce((s,g)=>s+g.len, 0);
@@ -2526,9 +2628,16 @@ const CanvasInner = () => {
     }
   }, [nodes, setNodes]);
 
-  const onNodeDragStop = useCallback(() => {
-    setGuides([]); // 드래그 끝나면 가이드 제거
-  }, []);
+  const onNodeDragStop = useCallback((_, dragNode) => {
+    setGuides([]);
+    // 이동된 노드에 연결된 엣지의 waypoints 초기화 → 자동 재라우팅
+    setEdges(es => es.map(e => {
+      if (e.source === dragNode.id || e.target === dragNode.id) {
+        return { ...e, data: { ...e.data, waypoints: [] } };
+      }
+      return e;
+    }));
+  }, [setEdges]);
 
   const onUpdateNode=useCallback((id,newData)=>{
     setNodes(ns=>ns.map(n=>n.id===id?{...n,data:newData}:n));
@@ -2702,8 +2811,7 @@ const CanvasInner = () => {
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
               connectionMode={ConnectionMode.Loose}
               connectionLineType="straight"
-              connectionLineStyle={{ stroke:"#3b82f6",strokeWidth:1.5,strokeDasharray:"4 2" }}
-              connectionLineStyle={{ stroke:"#3b82f6",strokeWidth:2 }}
+              connectionLineStyle={{ stroke:"#0d9488",strokeWidth:2,strokeDasharray:"4 2" }}
               defaultEdgeOptions={{ type:"pipe" }}
               // ── fitView: 전체 노드가 화면에 맞게 보임 ─────────
               fitView
