@@ -853,41 +853,38 @@ const FLUID_COLORS = {
 };
 const getFluidColor = s => FLUID_COLORS[s] || "#94a3b8";
 
+// EQUIP_DEFAULTS: 신규 spec 필드 키 기준 기본값
+// (구버전 capacity/material/designP/designT 는 사용하지 않음)
 const EQUIP_DEFAULTS = {
-  Tank:             { capacity:"100 m³",      material:"SS304",     designP:"5 Bar g",   designT:"80 ℃"  },
-  Pump:             { capacity:"50 m³/h",     material:"CI",        designP:"10 Bar g",  designT:"60 ℃"  },
-  Pond:             { capacity:"500 m³",      material:"Concrete",  designP:"0.5 Bar g", designT:"40 ℃"  },
-  "Heat Exchanger": { capacity:"500 kW",      material:"SS316",     designP:"16 Bar g",  designT:"200 ℃" },
-  Filter:           { capacity:"20 m³/h",     material:"SS304",     designP:"6 Bar g",   designT:"80 ℃"  },
-  Hopper:           { capacity:"10 m³",       material:"MS",        designP:"1 Bar g",   designT:"50 ℃"  },
-  Decanter:         { capacity:"15 m³/h",     material:"SS316",     designP:"4 Bar g",   designT:"60 ℃"  },
-  "Cooling Tower":  { capacity:"1000 kW",     material:"FRP",       designP:"3 Bar g",   designT:"45 ℃"  },
-  Clarifier:        { capacity:"200 m³/h",    material:"MS+Coated", designP:"1 Bar g",   designT:"40 ℃"  },
-  Classifier:       { capacity:"50 t/h",      material:"MS",        designP:"1 Bar g",   designT:"60 ℃"  },
-  "Feed Box":       { capacity:"5 m³",        material:"MS",        designP:"2 Bar g",   designT:"50 ℃"  },
-  "Chemical Dosing":{ capacity:"100 L/h",     material:"PP",        designP:"5 Bar g",   designT:"40 ℃"  },
-  Scrubber:         { capacity:"10000 Nm³/h", material:"FRP",       designP:"0.5 Bar g", designT:"60 ℃"  },
-  "Bag Filter":     { capacity:"5000 Nm³/h",  material:"CS",        designP:"0.3 Bar g", designT:"180 ℃" },
-  Reactor:          { capacity:"50 m³",       material:"SS316L",    designP:"10 Bar g",  designT:"150 ℃" },
-  "Feed Bin":       { capacity:"20 m³",       material:"MS",        designP:"1 Bar g",   designT:"50 ℃"  },
-  "Gas Duct":       { capacity:"20000 Nm³/h", material:"MS",        designP:"0.5 Bar g", designT:"300 ℃" },
-  "Steel Structure":{ capacity:"-",           material:"A36 Steel", designP:"-",         designT:"-"      },
-  // ME 신규 항목
-  Reactor:          { capacity:"50 m³",       material:"SS316L",    designP:"10 Bar g",  designT:"150 ℃" },
-  Scrubber:         { capacity:"10000 Nm³/h", material:"FRP",       designP:"0.5 Bar g", designT:"60 ℃"  },
-  "Bag Filter":     { capacity:"5000 Nm³/h",  material:"CS",        designP:"0.3 Bar g", designT:"180 ℃" },
-  "Feed Bin":       { capacity:"20 m³",       material:"MS",        designP:"1 Bar g",   designT:"50 ℃"  },
-  "Bucket Elev.":   { capacity:"50 t/h",      material:"MS",        designP:"-",         designT:"60 ℃"  },
-  Compressor:       { capacity:"5000 Nm³/h",  material:"CS",        designP:"10 Bar g",  designT:"80 ℃"  },
-  Fan:              { capacity:"20000 Nm³/h", material:"CS",        designP:"0.3 Bar g", designT:"200 ℃" },
-  "Stand Pipe":     { capacity:"10 m³",       material:"MS",        designP:"5 Bar g",   designT:"300 ℃" },
-  Bubbler:          { capacity:"-",           material:"MS",        designP:"2 Bar g",   designT:"200 ℃" },
-  Riser:            { capacity:"-",           material:"MS",        designP:"3 Bar g",   designT:"300 ℃" },
-  "Pnumatic Conv.": { capacity:"30 t/h",      material:"MS",        designP:"3 Bar g",   designT:"80 ℃"  },
-  Conveyor:         { capacity:"100 t/h",     material:"MS",        designP:"-",         designT:"60 ℃"  },
-  Machine:          { capacity:"-",           material:"MS",        designP:"-",         designT:"-"      },
-  Structure:        { capacity:"-",           material:"A36 Steel", designP:"-",         designT:"-"      },
-  "Hot Duct":       { capacity:"30000 Nm³/h", material:"MS",        designP:"0.3 Bar g", designT:"900 ℃" },
+  Tank:             { medium:"Water",           capacity:"100",  designP:"5",   designT:"80",  material:"SS304"     },
+  Pump:             { kindOfLiquid:"Water",     capacity:"50",   deliveryHead:"30", suctionPress:"0.1", dischargePress:"3.1", material:"SC410", impeller:"SSC13" },
+  Pond:             { medium:"Process Water",   capacity:"500",  designP:"0.5", designT:"40",  material:"Concrete"  },
+  "Heat Exchanger": { capacity:"500",           designP:"6",     designT:"80",  material:"SS316"     },
+  Filter:           { flowMedium:"Water",       capacity:"20",   designP:"6",   designT:"80",  material:"CS"        },
+  Hopper:           { medium:"Dry Solid",       capacity:"10",   designT:"50",  material:"MS"        },
+  Decanter:         { feedLiquid:"Sludge",      capacity:"20",   designT:"60",  material:"SS304"     },
+  "Cooling Tower":  { capacity:"1000",          inletTemp:"42",  outletTemp:"32", material:"FRP"     },
+  Clarifier:        { feedLiquid:"Slurry",      capacity:"2200", designT:"70",  material:"CS+Epoxy"  },
+  Classifier:       { feedLiquid:"Slurry",      capacity:"400",  designT:"60",  material:"SM45C"     },
+  "Feed Box":       { feedLiquid:"Slurry",      capacity:"56",   operPress:"0", designT:"80",  material:"CS"        },
+  "Chemical Dosing":{ kindOfLiquid:"Chemical",  capacity:"10",   deliveryHead:"50", material:"PP"    },
+  Scrubber:         { medium:"Gas",             capacity:"10000",designP:"0.5", designT:"60",  material:"FRP"       },
+  "Bag Filter":     { medium:"Gas",             capacity:"5000", designP:"0.3", designT:"180", material:"CS"        },
+  Reactor:          { medium:"Gas",             capacity:"50",   designP:"10",  designT:"150", material:"SS316L"    },
+  "Feed Bin":       { medium:"Solid",           capacity:"20",   designT:"50",  material:"MS"        },
+  "Gas Duct":       { medium:"Gas",             capacity:"20000",designP:"0.5", designT:"300", material:"MS"        },
+  "Steel Structure":{ material:"A36 Steel"                                                            },
+  "Bucket Elev.":   { medium:"Solid",           capacity:"50",   material:"MS"                        },
+  Compressor:       { medium:"Gas",             capacity:"5000", inletPress:"11",dischargePress:"38", material:"CS" },
+  Fan:              { medium:"Air",             capacity:"20000",staticPress:"450", material:"CS"     },
+  "Stand Pipe":     { medium:"Gas",             capacity:"10",   designP:"5",   designT:"300", material:"MS"        },
+  Bubbler:          { medium:"Gas",             designP:"2",     designT:"200", material:"MS"         },
+  Riser:            { medium:"Gas",             designP:"3",     designT:"300", material:"MS"         },
+  "Pnumatic Conv.": { medium:"Solid",           capacity:"30",   material:"MS"                        },
+  Conveyor:         { medium:"Solid",           capacity:"100",  material:"MS"                        },
+  Machine:          { material:"MS"                                                                    },
+  Structure:        { material:"A36 Steel"                                                             },
+  "Hot Duct":       { medium:"Hot Gas",         capacity:"30000",designP:"0.3", designT:"900", material:"MS"       },
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -2137,12 +2134,40 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                   </span>
                 </div>
                 {getSpecFields(d.equipType).map(({key,label,unit})=>(
-                  <div key={key} style={{ marginBottom:6 }}>
-                    <label style={L}>{label}{unit?<span style={{ color:"#94a3b8",marginLeft:3 }}>({unit})</span>:""}</label>
-                    <input style={{ ...I,marginBottom:0 }}
-                      value={d[key]||""}
-                      onChange={e=>upN(key,e.target.value)}
-                      placeholder={unit}/>
+                  <div key={key} style={{ marginBottom:5 }}>
+                    {/* 라벨: 항목명 + 단위 */}
+                    <label style={{ ...L, marginBottom:1 }}>
+                      {label}
+                      {unit && (
+                        <span style={{ color:"#94a3b8",fontWeight:400,marginLeft:4,fontSize:10 }}>
+                          {unit}
+                        </span>
+                      )}
+                    </label>
+                    {/* 입력란: 단위 suffix 별도 표시, placeholder는 빈 값 */}
+                    <div style={{ display:"flex",alignItems:"center",gap:4 }}>
+                      <input
+                        style={{ ...I, marginBottom:0, flex:1 }}
+                        value={
+                          // 이전 버전 잔재 키 정리: 숫자+단위 형태면 숫자만 추출하지 않고 그대로 표시
+                          // 단, 값 끝에 단위가 붙어있으면 제거 후 표시
+                          (() => {
+                            const v = d[key] || "";
+                            if (!unit || !v) return v;
+                            // "80 m³/h" → "80" 으로 정리 (단위가 이미 라벨에 있으므로)
+                            const stripped = v.replace(new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`), "").trim();
+                            return stripped;
+                          })()
+                        }
+                        onChange={e => upN(key, e.target.value)}
+                        placeholder=""
+                      />
+                      {unit && (
+                        <span style={{ fontSize:10,color:"#94a3b8",whiteSpace:"nowrap",flexShrink:0 }}>
+                          {unit}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 ))}
 
@@ -2395,6 +2420,58 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
 // SAVE MEMO MODAL — 저장 시 수정자·수정내용 입력
 // ─────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────
+// Item No. 정규화 — 매칭 효율 개선
+// 규칙:
+//  1) 앞의 "RE" 제거
+//  2) 마침표(.) 제거
+//  3) A/B/C suffix (끝에 오는 단독 대문자) 제거 후 별도 보관
+//  4) 숫자+대문자알파벳+숫자 패턴만 남겨서 비교
+//
+// 예) "RE.82.91P01 A/B" → "8291P01"
+//     "82.91P01"         → "8291P01"
+//     "RE.81.1P01"       → "811P01"
+//     "82.93H01 A/B"     → "8293H01"
+// ─────────────────────────────────────────────────────────────
+const normalizeItemNo = (raw) => {
+  if (!raw) return "";
+  let s = raw.toUpperCase().trim();
+  // 1) 선두 "RE" 제거 (RE. 또는 RE 단독)
+  s = s.replace(/^RE\.?/, "");
+  // 2) 공백 이후 단독 대문자 suffix 제거: " A/B", " A", " B", " C" 등
+  s = s.replace(/\s+[A-Z](\/[A-Z])*\s*$/, "");
+  // 3) 마침표, 하이픈, 공백 모두 제거
+  s = s.replace(/[\.\-\s]/g, "");
+  // 4) 숫자+대문자+숫자 핵심 패턴 추출
+  //    예: "8291P01" (숫자들 + 대문자 1개 이상 + 숫자들)
+  const m = s.match(/(\d+[A-Z]+\d*|\d+[A-Z]+)/);
+  return m ? m[0] : s;
+};
+
+// Item No. 배열 정규화 (A/B/C 분리 포함)
+const normalizeItemNos = (rawItemNo) => {
+  const base = rawItemNo.trim();
+  const results = new Set();
+
+  // 원본 정규화
+  results.add(normalizeItemNo(base));
+
+  // A/B/C/D suffix 분리: "RE.82.91P01 A/B" → A, B 각각
+  const abcMatch = base.match(/^(.+?)\s+([A-Z](?:\/[A-Z])+)$/);
+  if (abcMatch) {
+    abcMatch[2].split("/").forEach(s => {
+      results.add(normalizeItemNo(`${abcMatch[1]} ${s}`));
+    });
+  }
+  // 숫자만으로 이루어진 suffix 처리: "RE.82.91P01/06" 형태
+  const numSuffix = base.match(/^(.+?)\/(\d+)$/);
+  if (numSuffix) {
+    results.add(normalizeItemNo(numSuffix[1]));
+  }
+
+  return [...results].filter(Boolean);
+};
+
+// ─────────────────────────────────────────────────────────────
 // SPEC IMPORT MODAL
 // 사양서 텍스트 붙여넣기 → Item No. 기준 자동 매핑
 // ─────────────────────────────────────────────────────────────
@@ -2416,12 +2493,14 @@ const SpecImportModal = ({ nodes, onApply, onCancel }) => {
       const itemMatch = block.match(/Item\s*No\.?\s*[\:：]?\s*([A-Za-z0-9\.\-\/\s]+?)(?:\n|\r|설\s*비\s*명)/i);
       if (!itemMatch) return;
       const rawItemNo = itemMatch[1].trim().replace(/\s+/g," ");
-      // A/B/C suffix 처리: "RE.81.1P01 A/B" → ["RE.81.1P01 A/B", "RE.81.1P01 A", "RE.81.1P01 B"]
+      // A/B/C suffix 처리 + 정규화
       const itemNos = [rawItemNo];
       const abcMatch = rawItemNo.match(/^(.+?)\s+([A-Z](?:\/[A-Z])+)$/);
       if (abcMatch) {
         abcMatch[2].split("/").forEach(s => itemNos.push(`${abcMatch[1]} ${s}`));
       }
+      // 정규화된 키 목록 (매칭용)
+      const normalizedKeys = normalizeItemNos(rawItemNo);
 
       // 설비명
       const nameMatch = block.match(/설\s*비\s*명\s*[\:：]?\s*(.+?)(?:\n|\r)/);
@@ -2444,6 +2523,7 @@ const SpecImportModal = ({ nodes, onApply, onCancel }) => {
 
       const spec = {
         itemNos,
+        normalizedKeys,   // ← 매칭용 정규화 키
         equipName,
         quantity: qtyMatch?.[1] || "1",
         // 공통
@@ -2517,14 +2597,12 @@ const SpecImportModal = ({ nodes, onApply, onCancel }) => {
 
   // 노드 Item No.와 매칭
   const getMatchedNodes = (block) => {
+    const blockKeys = block.normalizedKeys || normalizeItemNos(block.itemNos?.[0]||"");
     return nodes.filter(n => {
       if (n.type !== "equipment") return false;
-      const nodeNo = (n.data?.itemNo||"").trim().toUpperCase();
-      return block.itemNos.some(ino =>
-        nodeNo === ino.toUpperCase() ||
-        nodeNo.replace(/\s+/g,"") === ino.toUpperCase().replace(/\s+/g,"") ||
-        nodeNo.startsWith(ino.toUpperCase().split(" ")[0])
-      );
+      const nodeKey = normalizeItemNo(n.data?.itemNo||"");
+      if (!nodeKey) return false;
+      return blockKeys.some(bk => bk && bk === nodeKey);
     });
   };
 
@@ -3062,20 +3140,18 @@ const CanvasInner = () => {
   const applySpecImport = useCallback((parsedBlocks) => {
     setNodes(ns => ns.map(n => {
       if (n.type !== "equipment") return n;
-      const nodeNo = (n.data?.itemNo||"").trim().toUpperCase();
-      // 매칭 블록 찾기
-      const block = parsedBlocks.find(b =>
-        b.itemNos.some(ino =>
-          nodeNo === ino.toUpperCase() ||
-          nodeNo.replace(/\s+/g,"") === ino.toUpperCase().replace(/\s+/g,"") ||
-          nodeNo.startsWith(ino.toUpperCase().split(" ")[0])
-        )
-      );
+      const nodeKey = normalizeItemNo(n.data?.itemNo||"");
+      if (!nodeKey) return n;
+      // 정규화 키로 매칭 블록 찾기
+      const block = parsedBlocks.find(b => {
+        const bKeys = b.normalizedKeys || normalizeItemNos(b.itemNos?.[0]||"");
+        return bKeys.some(bk => bk && bk === nodeKey);
+      });
       if (!block) return n;
-      // 사양 필드 업데이트 (itemNos, equipName, quantity 제외한 모든 키)
+      // 사양 필드 업데이트 (itemNos, normalizedKeys, equipName, quantity 제외)
       const specData = {};
       Object.entries(block).forEach(([k,v]) => {
-        if (!["itemNos","equipName","quantity"].includes(k)) specData[k] = v;
+        if (!["itemNos","normalizedKeys","equipName","quantity"].includes(k)) specData[k] = v;
       });
       // 설비명도 업데이트 (기존 값 없을 때만)
       if (!n.data.label && block.equipName) specData.label = block.equipName;
