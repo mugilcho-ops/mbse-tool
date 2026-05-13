@@ -891,8 +891,192 @@ const EQUIP_DEFAULTS = {
 };
 
 // ─────────────────────────────────────────────────────────────
-// ID GENERATOR
+// 설비 유형별 맞춤 사양 항목 정의
 // ─────────────────────────────────────────────────────────────
+const EQUIP_SPEC_FIELDS = {
+  // Pump 계열
+  Pump: [
+    { key:"kindOfLiquid",   label:"Kind of Liquid",        unit:""        },
+    { key:"capacity",       label:"Capacity",              unit:"m³/h"    },
+    { key:"deliveryHead",   label:"Delivery Head",         unit:"m"       },
+    { key:"suctionPress",   label:"Suction Press.",        unit:"barg"    },
+    { key:"dischargePress", label:"Discharge Press.",      unit:"barg"    },
+    { key:"liquidTemp",     label:"Liquid Temp.",          unit:"℃"       },
+    { key:"construction",   label:"Type of Construction",  unit:""        },
+    { key:"shaftSeal",      label:"Shaft Seal",            unit:""        },
+    { key:"material",       label:"Casing Material",       unit:""        },
+    { key:"impeller",       label:"Impeller Material",     unit:""        },
+  ],
+  // Heat Exchanger 계열
+  "Heat Exchanger": [
+    { key:"flowRatePri",    label:"Flow Rate (Primary)",   unit:"m³/h"    },
+    { key:"flowRateSec",    label:"Flow Rate (Secondary)", unit:"m³/h"    },
+    { key:"inletTempPri",   label:"Inlet Temp. (Pri.)",    unit:"℃"       },
+    { key:"outletTempPri",  label:"Outlet Temp. (Pri.)",   unit:"℃"       },
+    { key:"inletTempSec",   label:"Inlet Temp. (Sec.)",    unit:"℃"       },
+    { key:"outletTempSec",  label:"Outlet Temp. (Sec.)",   unit:"℃"       },
+    { key:"designPress",    label:"Design Press.",         unit:"barg"    },
+    { key:"designTemp",     label:"Design Temp.",          unit:"℃"       },
+    { key:"capacity",       label:"Heat Duty",             unit:"kW"      },
+    { key:"material",       label:"Plate/Tube Material",   unit:""        },
+  ],
+  // Tank / Vessel 계열
+  Tank: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Effective Volume",      unit:"m³"      },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"operPress",      label:"Operating Press.",      unit:"barg"    },
+    { key:"operTemp",       label:"Operating Temp.",       unit:"℃"       },
+    { key:"material",       label:"Shell Material",        unit:""        },
+    { key:"installation",   label:"Installation",          unit:""        },
+  ],
+  // Cooling Tower
+  "Cooling Tower": [
+    { key:"capacity",       label:"Total Capacity",        unit:"m³/h"    },
+    { key:"inletTemp",      label:"Inlet Temp.",           unit:"℃"       },
+    { key:"outletTemp",     label:"Outlet Temp.",          unit:"℃"       },
+    { key:"wetBulbTemp",    label:"Wet Bulb Temp.",        unit:"℃"       },
+    { key:"numCells",       label:"Number of Cells",       unit:"pcs"     },
+    { key:"construction",   label:"Type of Construction",  unit:""        },
+    { key:"material",       label:"Filling Material",      unit:""        },
+  ],
+  // Filter
+  Filter: [
+    { key:"flowMedium",     label:"Flow Medium",           unit:""        },
+    { key:"capacity",       label:"Flow Rate",             unit:"m³/h"    },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"meshSize",       label:"Mesh Size",             unit:"μm"      },
+    { key:"pressureDrop",   label:"Pressure Drop",         unit:"barg"    },
+    { key:"material",       label:"Casing Material",       unit:""        },
+    { key:"filterType",     label:"Filter Type",           unit:""        },
+  ],
+  // Clarifier
+  Clarifier: [
+    { key:"feedLiquid",     label:"Feed Liquid",           unit:""        },
+    { key:"capacity",       label:"Flow Rate",             unit:"m³/h"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"overflowSolid",  label:"Overflow Solid",        unit:"mg/l"    },
+    { key:"underflowSolid", label:"Underflow Solid",       unit:"g/l"     },
+    { key:"clarifierSize",  label:"Clarifier Size",        unit:""        },
+    { key:"construction",   label:"Type of Construction",  unit:""        },
+    { key:"material",       label:"Frame Material",        unit:""        },
+  ],
+  // Decanter
+  Decanter: [
+    { key:"feedLiquid",     label:"Feed Liquid",           unit:""        },
+    { key:"capacity",       label:"Capacity",              unit:"m³/h"    },
+    { key:"solidContent",   label:"Solid Content",         unit:"g/l"     },
+    { key:"residualMoisture",label:"Residual Moisture",    unit:"%"       },
+    { key:"material",       label:"Bowl Material",         unit:""        },
+    { key:"scroll",         label:"Scroll Material",       unit:""        },
+  ],
+  // Compressor / Fan
+  Compressor: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Volume Flow Rate",      unit:"Nm³/h"   },
+    { key:"inletPress",     label:"Inlet Press.",          unit:"barg"    },
+    { key:"dischargePress", label:"Discharge Press.",      unit:"barg"    },
+    { key:"inletTemp",      label:"Inlet Temp.",           unit:"℃"       },
+    { key:"outletTemp",     label:"Outlet Temp.",          unit:"℃"       },
+    { key:"construction",   label:"Type of Design",        unit:""        },
+    { key:"numStages",      label:"Number of Stages",      unit:""        },
+  ],
+  Fan: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Volume Flow Rate",      unit:"m³/h"    },
+    { key:"staticPress",    label:"Static Press.",         unit:"mbar"    },
+    { key:"inletTemp",      label:"Inlet Temp.",           unit:"℃"       },
+    { key:"noiseLevel",     label:"Noise Level",           unit:"dB(A)"   },
+    { key:"material",       label:"Casing/Impeller",       unit:""        },
+  ],
+  // Chemical Dosing
+  "Chemical Dosing": [
+    { key:"kindOfLiquid",   label:"Kind of Liquid",        unit:""        },
+    { key:"capacity",       label:"Pump Capacity",         unit:"l/h"     },
+    { key:"deliveryHead",   label:"Delivery Head",         unit:"m"       },
+    { key:"tankVolume",     label:"Tank Volume",           unit:"m³"      },
+    { key:"liquidTemp",     label:"Liquid Temp.",          unit:"℃"       },
+    { key:"material",       label:"Tank Material",         unit:""        },
+    { key:"pumpType",       label:"Type of Pump",          unit:""        },
+  ],
+  // Classifier
+  Classifier: [
+    { key:"feedLiquid",     label:"Feed Liquid",           unit:""        },
+    { key:"capacity",       label:"Flow Rate",             unit:"m³/h"    },
+    { key:"solidsFlow",     label:"Solids Flow",           unit:"t/h"     },
+    { key:"particleSize",   label:"Particle Size",         unit:"mm"      },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"construction",   label:"Type of Construction",  unit:""        },
+    { key:"material",       label:"Shaft Material",        unit:""        },
+  ],
+  // Pond
+  Pond: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Effective Volume",      unit:"m³"      },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Material",              unit:""        },
+  ],
+  // Feed Box
+  "Feed Box": [
+    { key:"feedLiquid",     label:"Feed Liquid",           unit:""        },
+    { key:"capacity",       label:"Volume",                unit:"m³"      },
+    { key:"operPress",      label:"Operating Press.",      unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Shell Material",        unit:""        },
+  ],
+  // Hopper / Feed Bin / Cake Hopper
+  Hopper: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Effective Volume",      unit:"m³"      },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Shell Material",        unit:""        },
+  ],
+  "Feed Bin": [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Effective Volume",      unit:"m³"      },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Shell Material",        unit:""        },
+  ],
+  // Scrubber / Reactor / Bag Filter
+  Scrubber: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Volume Flow Rate",      unit:"Nm³/h"   },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Casing Material",       unit:""        },
+  ],
+  Reactor: [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Effective Volume",      unit:"m³"      },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"operPress",      label:"Operating Press.",      unit:"barg"    },
+    { key:"operTemp",       label:"Operating Temp.",       unit:"℃"       },
+    { key:"material",       label:"Shell Material",        unit:""        },
+  ],
+  "Bag Filter": [
+    { key:"medium",         label:"Medium",                unit:""        },
+    { key:"capacity",       label:"Volume Flow Rate",      unit:"Nm³/h"   },
+    { key:"designP",        label:"Design Press.",         unit:"barg"    },
+    { key:"designT",        label:"Design Temp.",          unit:"℃"       },
+    { key:"material",       label:"Casing Material",       unit:""        },
+  ],
+};
+
+// 기본 공통 사양 (유형별 정의가 없을 때)
+const DEFAULT_SPEC_FIELDS = [
+  { key:"capacity",  label:"Capacity",        unit:""    },
+  { key:"designP",   label:"Design Press.",   unit:"barg"},
+  { key:"designT",   label:"Design Temp.",    unit:"℃"   },
+  { key:"material",  label:"Material",        unit:""    },
+];
+
+// 설비 유형에 맞는 사양 필드 반환
+const getSpecFields = (equipType) =>
+  EQUIP_SPEC_FIELDS[equipType] || DEFAULT_SPEC_FIELDS;
 let _idCnt = 1;
 const uid = (p="n") => `${p}_${Date.now()}_${_idCnt++}`;
 
@@ -1941,14 +2125,29 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
             {isNode&&sel.type==="equipment"&&(
               <>
                 <label style={L}>Item No (또는 더블클릭)</label>
-                <input style={I} value={d.itemNo||""} onChange={e=>upN("itemNo",e.target.value)} placeholder="e.g. T-101"/>
-                <label style={L}>Description</label>
+                <input style={I} value={d.itemNo||""} onChange={e=>upN("itemNo",e.target.value)} placeholder="e.g. RE.82.91P01"/>
+                <label style={L}>설비명 (Description)</label>
                 <input style={I} value={d.label||""} onChange={e=>upN("label",e.target.value)}/>
-                <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"6px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Engineering Spec</div>
-                {[["material","Material"],["capacity","Capacity"],["designP","Design Pressure"],["designT","Design Temp"]].map(([k,l])=>(
-                  <React.Fragment key={k}><label style={L}>{l}</label><input style={I} value={d[k]||""} onChange={e=>upN(k,e.target.value)}/></React.Fragment>
+
+                {/* ── 설비 유형별 맞춤 사양 필드 ── */}
+                <div style={{ fontWeight:600,fontSize:11,color:"#1d4ed8",margin:"8px 0 5px",borderTop:"2px solid #eff6ff",paddingTop:6,display:"flex",alignItems:"center",gap:4 }}>
+                  <span>⚙ Engineering Spec</span>
+                  <span style={{ fontSize:9,background:"#eff6ff",color:"#3b82f6",borderRadius:3,padding:"1px 5px",fontWeight:400 }}>
+                    {d.equipType}
+                  </span>
+                </div>
+                {getSpecFields(d.equipType).map(({key,label,unit})=>(
+                  <div key={key} style={{ marginBottom:6 }}>
+                    <label style={L}>{label}{unit?<span style={{ color:"#94a3b8",marginLeft:3 }}>({unit})</span>:""}</label>
+                    <input style={{ ...I,marginBottom:0 }}
+                      value={d[key]||""}
+                      onChange={e=>upN(key,e.target.value)}
+                      placeholder={unit}/>
+                  </div>
                 ))}
-                <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"6px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Port Management</div>
+
+                {/* 포트 관리 */}
+                <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"8px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>Port Management</div>
                 <div style={{ display:"flex",flexWrap:"wrap",gap:5,marginBottom:6 }}>
                   {["top","bottom","left","right"].map(dir=>(
                     <button key={dir} onClick={()=>onAddHandle(sel.id,dir)} style={{ background:"#eff6ff",border:"1px solid #bfdbfe",color:"#1d4ed8",borderRadius:4,padding:"2px 8px",cursor:"pointer",fontSize:11 }}>+ {dir}</button>
@@ -2195,6 +2394,236 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
 // ─────────────────────────────────────────────────────────────
 // SAVE MEMO MODAL — 저장 시 수정자·수정내용 입력
 // ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// SPEC IMPORT MODAL
+// 사양서 텍스트 붙여넣기 → Item No. 기준 자동 매핑
+// ─────────────────────────────────────────────────────────────
+const SpecImportModal = ({ nodes, onApply, onCancel }) => {
+  const [text,   setText]   = useState("");
+  const [parsed, setParsed] = useState(null);
+  const [status, setStatus] = useState("idle"); // idle|parsing|done|error
+
+  // ── 사양서 파싱 ────────────────────────────────────────────
+  // Item No.가 "RE.xx.xxXxx" 형태이거나 "Item No. : xxx" 패턴으로 등장
+  const parseSpec = (raw) => {
+    const blocks = [];
+    // 패턴: "Item No." 또는 "Item No :" 로 구분하여 블록 분리
+    const parts = raw.split(/(?=Item\s*No\.?\s*[\:：]?\s*[A-Za-z0-9])/i)
+      .filter(p => /Item\s*No/i.test(p));
+
+    parts.forEach(block => {
+      // Item No. 추출
+      const itemMatch = block.match(/Item\s*No\.?\s*[\:：]?\s*([A-Za-z0-9\.\-\/\s]+?)(?:\n|\r|설\s*비\s*명)/i);
+      if (!itemMatch) return;
+      const rawItemNo = itemMatch[1].trim().replace(/\s+/g," ");
+      // A/B/C suffix 처리: "RE.81.1P01 A/B" → ["RE.81.1P01 A/B", "RE.81.1P01 A", "RE.81.1P01 B"]
+      const itemNos = [rawItemNo];
+      const abcMatch = rawItemNo.match(/^(.+?)\s+([A-Z](?:\/[A-Z])+)$/);
+      if (abcMatch) {
+        abcMatch[2].split("/").forEach(s => itemNos.push(`${abcMatch[1]} ${s}`));
+      }
+
+      // 설비명
+      const nameMatch = block.match(/설\s*비\s*명\s*[\:：]?\s*(.+?)(?:\n|\r)/);
+      const equipName = nameMatch?.[1]?.trim() || "";
+
+      // 수량
+      const qtyMatch = block.match(/수\s*량\s*[\:：]?\s*(\d+)/);
+
+      // 사양 추출 함수
+      const extractVal = (patterns) => {
+        for (const p of patterns) {
+          const m = block.match(new RegExp(p + "\\s*[\\:：]?\\s*([^\\n\\r]+)","i"));
+          if (m) {
+            const v = m[1].trim().replace(/\s*\/\s*/g," / ");
+            if (v && v !== "-" && v !== "TBD") return v;
+          }
+        }
+        return "";
+      };
+
+      const spec = {
+        itemNos,
+        equipName,
+        quantity: qtyMatch?.[1] || "1",
+        // 공통
+        kindOfLiquid:   extractVal(["Kind of [Ll]iquid","Flow medium","Medium"]),
+        capacity:       extractVal(["Capacity","Volume flow rate","Total capacity","Flow rate from process","Flow rate\\s*\\(m"]),
+        deliveryHead:   extractVal(["Delivery head"]),
+        suctionPress:   extractVal(["Suction [Pp]ress"]),
+        dischargePress: extractVal(["Discharge [Pp]ress"]),
+        liquidTemp:     extractVal(["Liquid [Tt]emp","Inlet [Tt]emp"]),
+        designP:        extractVal(["Design [Pp]ress"]),
+        designT:        extractVal(["Design [Tt]emp","Design temp"]),
+        operPress:      extractVal(["Operating [Pp]ress","Operating pressure"]),
+        operTemp:       extractVal(["Operating [Tt]emp","Operating temperature"]),
+        construction:   extractVal(["Type of construction","Type of design"]),
+        shaftSeal:      extractVal(["Type of shaft seal","Shaft seal"]),
+        material:       extractVal(["Casing\t\t","Casing\\s+:", "Shell material","Framework"]),
+        impeller:       extractVal(["Impeller\t\t","Impeller\\s+:"]),
+        // HX 전용
+        flowRatePri:    extractVal(["Flow rate \\(m.*\\).*Primary","Primary.*flow"]),
+        inletTempPri:   extractVal(["Inlet.*temp.*Primary","Primary.*inlet"]),
+        outletTempPri:  extractVal(["Outlet.*temp.*Primary"]),
+        inletTempSec:   extractVal(["Inlet.*temp.*Secondary","Secondary.*inlet"]),
+        outletTempSec:  extractVal(["Outlet.*temp.*Secondary"]),
+        // Cooling Tower
+        outletTemp:     extractVal(["Outlet [Tt]emp"]),
+        wetBulbTemp:    extractVal(["Wet bulb [Tt]emp"]),
+        numCells:       extractVal(["Number of cells"]),
+        // Filter
+        meshSize:       extractVal(["Mesh size"]),
+        pressureDrop:   extractVal(["Press.*drop"]),
+        // Clarifier
+        overflowSolid:  extractVal(["Overflow [Ss]olid"]),
+        underflowSolid: extractVal(["Underflow [Ss]olid"]),
+        // Chemical dosing
+        tankVolume:     extractVal(["Tank volume"]),
+        pumpType:       extractVal(["Type of pump"]),
+        // Compressor / Fan
+        inletPress:     extractVal(["Inlet [Pp]ress"]),
+        outletTemp2:    extractVal(["Outlet [Tt]emp.*max"]),
+        numStages:      extractVal(["Number of stages"]),
+        staticPress:    extractVal(["Static [Pp]ress"]),
+        noiseLevel:     extractVal(["Noise level"]),
+        // Misc
+        medium:         extractVal(["Medium\t\t","Medium\\s+:"]),
+        installation:   extractVal(["Place of installation"]),
+        solidContent:   extractVal(["Solid content","Density of solid"]),
+        particleSize:   extractVal(["Particle size"]),
+      };
+      // 빈 값 제거
+      Object.keys(spec).forEach(k => {
+        if (typeof spec[k] === "string" && !spec[k]) delete spec[k];
+      });
+      blocks.push(spec);
+    });
+    return blocks;
+  };
+
+  const handleParse = () => {
+    if (!text.trim()) return;
+    setStatus("parsing");
+    setTimeout(() => {
+      try {
+        const blocks = parseSpec(text);
+        setParsed(blocks);
+        setStatus("done");
+      } catch(e) {
+        setStatus("error");
+      }
+    }, 100);
+  };
+
+  // 노드 Item No.와 매칭
+  const getMatchedNodes = (block) => {
+    return nodes.filter(n => {
+      if (n.type !== "equipment") return false;
+      const nodeNo = (n.data?.itemNo||"").trim().toUpperCase();
+      return block.itemNos.some(ino =>
+        nodeNo === ino.toUpperCase() ||
+        nodeNo.replace(/\s+/g,"") === ino.toUpperCase().replace(/\s+/g,"") ||
+        nodeNo.startsWith(ino.toUpperCase().split(" ")[0])
+      );
+    });
+  };
+
+  const totalMatches = parsed ? parsed.reduce((s,b)=>s+getMatchedNodes(b).length,0) : 0;
+
+  return (
+    <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999 }}>
+      <div style={{ background:"#fff",borderRadius:12,padding:0,width:640,maxHeight:"85vh",display:"flex",flexDirection:"column",boxShadow:"0 20px 60px rgba(0,0,0,0.25)" }}>
+        {/* 헤더 */}
+        <div style={{ padding:"16px 20px 12px",borderBottom:"1px solid #e2e8f0",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+          <div>
+            <div style={{ fontWeight:800,fontSize:15,color:"#0f172a" }}>📋 사양서 자동 입력</div>
+            <div style={{ fontSize:11,color:"#64748b",marginTop:2 }}>사양서 텍스트를 붙여넣으면 Item No. 기준으로 자동 매핑됩니다</div>
+          </div>
+          <button onClick={onCancel} style={{ background:"#f1f5f9",border:"none",borderRadius:5,padding:"4px 10px",cursor:"pointer",color:"#64748b" }}>✕ 닫기</button>
+        </div>
+
+        <div style={{ flex:1,overflowY:"auto",padding:"16px 20px" }}>
+          {status !== "done" ? (
+            <>
+              <label style={{ fontSize:11,fontWeight:600,color:"#334155",display:"block",marginBottom:6 }}>
+                사양서 텍스트 붙여넣기 (Ctrl+V)
+              </label>
+              <textarea
+                style={{ width:"100%",height:220,border:"1.5px solid #e2e8f0",borderRadius:8,padding:"10px",fontSize:11,resize:"vertical",boxSizing:"border-box",fontFamily:"monospace",lineHeight:1.5 }}
+                value={text}
+                onChange={e=>setText(e.target.value)}
+                placeholder={"Item No.\tRE.81.1P01 A/B\n\n설 비 명\tMake up water pump\n수    량\t2 sets\n\n설비사양\n\t설계조건\n\tCapacity (m3/h)\t: 80\n\tDelivery head (m)\t: 140\n\t...\n\n여러 설비를 한번에 붙여넣기 가능합니다."}
+              />
+              {status === "error" && (
+                <div style={{ color:"#dc2626",fontSize:11,marginTop:6 }}>파싱 오류가 발생했습니다. 텍스트 형식을 확인해주세요.</div>
+              )}
+            </>
+          ) : (
+            <>
+              <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:12,padding:"8px 12px",background:"#f0fdf4",borderRadius:6,border:"1px solid #bbf7d0" }}>
+                <span style={{ fontSize:16 }}>✅</span>
+                <div>
+                  <div style={{ fontWeight:700,fontSize:12,color:"#15803d" }}>
+                    {parsed.length}개 설비 파싱 완료 — MBSE 모델 매칭: {totalMatches}개 노드
+                  </div>
+                  <div style={{ fontSize:10,color:"#16a34a" }}>매칭된 노드에 사양이 자동 입력됩니다</div>
+                </div>
+              </div>
+
+              {parsed.map((block, bi) => {
+                const matched = getMatchedNodes(block);
+                return (
+                  <div key={bi} style={{ marginBottom:10,border:`1px solid ${matched.length?"#bfdbfe":"#e2e8f0"}`,borderRadius:8,overflow:"hidden" }}>
+                    <div style={{ padding:"8px 12px",background:matched.length?"#eff6ff":"#f8fafc",display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                      <div>
+                        <span style={{ fontWeight:700,fontSize:12,color:"#1d4ed8" }}>{block.itemNos[0]}</span>
+                        <span style={{ fontSize:11,color:"#64748b",marginLeft:8 }}>{block.equipName}</span>
+                      </div>
+                      {matched.length > 0
+                        ? <span style={{ fontSize:10,background:"#1d4ed8",color:"#fff",borderRadius:4,padding:"1px 7px",fontWeight:600 }}>✓ {matched.length}개 매칭</span>
+                        : <span style={{ fontSize:10,background:"#f1f5f9",color:"#94a3b8",borderRadius:4,padding:"1px 7px" }}>미매칭</span>
+                      }
+                    </div>
+                    <div style={{ padding:"8px 12px",display:"flex",flexWrap:"wrap",gap:"4px 12px" }}>
+                      {Object.entries(block).filter(([k])=>!["itemNos","equipName","quantity"].includes(k)).map(([k,v])=>(
+                        <div key={k} style={{ fontSize:10,color:"#475569" }}>
+                          <span style={{ color:"#94a3b8" }}>{k}:</span> <span style={{ fontWeight:600 }}>{v}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* 하단 버튼 */}
+        <div style={{ padding:"12px 20px",borderTop:"1px solid #e2e8f0",display:"flex",gap:8,justifyContent:"flex-end" }}>
+          {status !== "done" ? (
+            <>
+              <button onClick={onCancel} style={{ background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontSize:12 }}>취소</button>
+              <button onClick={handleParse}
+                disabled={!text.trim()}
+                style={{ background:text.trim()?"#1d4ed8":"#94a3b8",color:"#fff",border:"none",borderRadius:6,padding:"8px 20px",cursor:text.trim()?"pointer":"default",fontWeight:700,fontSize:12 }}>
+                {status==="parsing"?"파싱 중...":"🔍 분석 시작"}
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={()=>{setParsed(null);setStatus("idle");setText("");}} style={{ background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 16px",cursor:"pointer",fontSize:12 }}>다시 붙여넣기</button>
+              <button onClick={()=>onApply(parsed)} disabled={totalMatches===0}
+                style={{ background:totalMatches?"#1d4ed8":"#94a3b8",color:"#fff",border:"none",borderRadius:6,padding:"8px 20px",cursor:totalMatches?"pointer":"default",fontWeight:700,fontSize:12 }}>
+                ✅ {totalMatches}개 노드에 사양 적용
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SaveMemoModal = ({ nodes, edges, onConfirm, onCancel }) => {
   const [author,  setAuthor]  = useState("");
   const [summary, setSummary] = useState("");
@@ -2306,7 +2735,8 @@ const CanvasInner = () => {
   const [sel,setSel]       = useState(null);
   const [modal,setModal]   = useState(false);
   const [modalDefault,setModalDefault] = useState("Piping");
-  const [guides,setGuides] = useState([]); // Smart Guide 가상선
+  const [guides,setGuides] = useState([]);
+  const [showSpecImport, setShowSpecImport] = useState(false); // Smart Guide 가상선
   const connRef     = useRef(null);
   const fileRef     = useRef(null);
   const xlsxRef     = useRef(null);
@@ -2628,8 +3058,35 @@ const CanvasInner = () => {
     }
   }, [nodes, setNodes]);
 
-  const onNodeDragStop = useCallback((_, dragNode) => {
-    setGuides([]);
+  // ── 사양서 자동 입력 적용 ─────────────────────────────────
+  const applySpecImport = useCallback((parsedBlocks) => {
+    setNodes(ns => ns.map(n => {
+      if (n.type !== "equipment") return n;
+      const nodeNo = (n.data?.itemNo||"").trim().toUpperCase();
+      // 매칭 블록 찾기
+      const block = parsedBlocks.find(b =>
+        b.itemNos.some(ino =>
+          nodeNo === ino.toUpperCase() ||
+          nodeNo.replace(/\s+/g,"") === ino.toUpperCase().replace(/\s+/g,"") ||
+          nodeNo.startsWith(ino.toUpperCase().split(" ")[0])
+        )
+      );
+      if (!block) return n;
+      // 사양 필드 업데이트 (itemNos, equipName, quantity 제외한 모든 키)
+      const specData = {};
+      Object.entries(block).forEach(([k,v]) => {
+        if (!["itemNos","equipName","quantity"].includes(k)) specData[k] = v;
+      });
+      // 설비명도 업데이트 (기존 값 없을 때만)
+      if (!n.data.label && block.equipName) specData.label = block.equipName;
+      return { ...n, data: { ...n.data, ...specData } };
+    }));
+    setShowSpecImport(false);
+    setSaveMsg(`✅ 사양서 ${parsedBlocks.length}건 적용 완료`);
+    setTimeout(()=>setSaveMsg(""),3000);
+  },[setNodes]);
+
+  const onNodeDragStop = useCallback((_, dragNode) => {    setGuides([]);
     // 이동된 노드에 연결된 엣지의 waypoints 초기화 → 자동 재라우팅
     setEdges(es => es.map(e => {
       if (e.source === dragNode.id || e.target === dragNode.id) {
@@ -2772,7 +3229,11 @@ const CanvasInner = () => {
           {/* 구분선 */}
           <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
 
-          {/* 전체보기 */}
+          {/* 📋 사양서 자동 입력 */}
+          <button onClick={()=>setShowSpecImport(true)}
+            style={{ background:"#7c3aed",color:"#fff",border:"none",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700 }}>
+            📋 사양서 Import
+          </button>
           <button onClick={()=>fitView({ padding:0.15, duration:400 })}
             style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>
             ⊞ 전체보기
@@ -2929,6 +3390,15 @@ const CanvasInner = () => {
         </div>
       </div>
       {modal&&<ConnModal defaultType={modalDefault} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; }}/>}
+
+      {/* 사양서 자동 입력 모달 */}
+      {showSpecImport && (
+        <SpecImportModal
+          nodes={nodes}
+          onApply={applySpecImport}
+          onCancel={()=>setShowSpecImport(false)}
+        />
+      )}
 
       {/* 저장 메모 모달 */}
       {showSaveModal && (
