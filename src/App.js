@@ -1444,10 +1444,27 @@ const InstrumentNode = memo(({ data, selected }) => (
 //  ⑤ 라벨: 가장 긴 세그먼트 중앙
 // ═══════════════════════════════════════════════════════════════
 
-const ELBOW_R   = 4;   // 꺾임 반경
-const MIN_STUB  = 20;  // 1번 요건: 포트 이후 최소 직선 길이 (육안 확인 가능)
-const MARGIN    = 24;  // 장애물 여백
+// ═══════════════════════════════════════════════════════════════
+// P&ID-GRADE SMART ROUTING SYSTEM
+//
+// 적용 사양:
+//  ① A* 그리드 기반 장애물 회피 (10px grid, 8px padding, cornerCost=5)
+//  ② Strict orthogonal: 수평·수직만, 꺾임 radius=8px
+//  ③ Multi-line parallel offset: 같은 segment 공유 시 4px 간격
+//  ④ Live re-routing: 드래그 중엔 L-shape 빠른 경로
+// ═══════════════════════════════════════════════════════════════
+
+const ELBOW_R   = 8;    // 꺾임 반경 (P&ID 사양)
+const MIN_STUB  = 20;   // 포트 이탈 최소 직선
+const MARGIN    = 24;   // 장애물 여백 (드래그 중 빠른 라우팅용)
 const SNAP_TOL  = 6;
+const GRID      = 10;   // A* grid resolution
+const PADDING   = 8;    // bbox 확장 padding
+const CORNER_COST = 5;  // A* 꺾임 페널티
+const PARALLEL_GAP = 4; // 같은 segment 공유 시 평행 간격
+
+// 좌표 → grid 스냅
+const snapGrid = (v) => Math.round(v / GRID) * GRID;
 
 // ── 포트 방향 벡터 ──────────────────────────────────────────
 const portVec = pos => {
@@ -1456,6 +1473,146 @@ const portVec = pos => {
   if (pos==="bottom") return {dx:0,dy:1};
   if (pos==="top")    return {dx:0,dy:-1};
   return {dx:1,dy:0};
+};
+
+// ═══════════════════════════════════════════════════════════════
+// A* PATHFINDER — grid 기반 장애물 회피
+// 입력: 시작/끝 좌표, 시작/끝 방향, 장애물 박스 배열
+// 출력: orthogonal path 포인트 배열 (없으면 null)
+// ═══════════════════════════════════════════════════════════════
+const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
+  // 좌표를 grid 단위로 변환
+  const gSx = Math.round(sx / GRID), gSy = Math.round(sy / GRID);
+  const gTx = Math.round(tx / GRID), gTy = Math.round(ty / GRID);
+
+  // bounds 제한 (탐색 영역) — 시작/끝 주변 +/-200 cells
+  const minGX = Math.min(gSx, gTx) - 30;
+  const maxGX = Math.max(gSx, gTx) + 30;
+  const minGY = Math.min(gSy, gTy) - 30;
+  const maxGY = Math.max(gSy, gTy) + 30;
+
+  // 장애물을 grid 단위로 미리 변환
+  const gObs = obstacles.map(o => ({
+    x1: Math.floor(o.x1 / GRID),
+    y1: Math.floor(o.y1 / GRID),
+    x2: Math.ceil(o.x2 / GRID),
+    y2: Math.ceil(o.y2 / GRID),
+  }));
+
+  const isBlocked = (gx, gy) => {
+    // 시작점과 끝점 grid는 항상 허용
+    if ((gx===gSx && gy===gSy) || (gx===gTx && gy===gTy)) return false;
+    for (const o of gObs) {
+      if (gx >= o.x1 && gx <= o.x2 && gy >= o.y1 && gy <= o.y2) return true;
+    }
+    return false;
+  };
+
+  // direction: 0=right, 1=down, 2=left, 3=up
+  const dirVec = [[1,0],[0,1],[-1,0],[0,-1]];
+  const posToDir = (pos) => pos==="right"?0:pos==="bottom"?1:pos==="left"?2:3;
+
+  const startDir = posToDir(sDir);
+
+  // Heap (배열 기반 우선순위 큐, 단순 구현)
+  const heap = [];
+  const key = (gx,gy,d) => `${gx},${gy},${d}`;
+  const visited = new Map();
+
+  heap.push({ gx:gSx, gy:gSy, dir:startDir, g:0, parent:null });
+
+  let iter = 0;
+  const MAX_ITER = 8000; // 안전 제한 — 60fps 유지
+
+  while (heap.length > 0 && iter < MAX_ITER) {
+    iter++;
+    // 가장 낮은 f값 찾기
+    let minIdx = 0;
+    let minF = Infinity;
+    for (let i = 0; i < heap.length; i++) {
+      const c = heap[i];
+      const h = Math.abs(c.gx-gTx) + Math.abs(c.gy-gTy);
+      const f = c.g + h;
+      if (f < minF) { minF = f; minIdx = i; }
+    }
+    const cur = heap.splice(minIdx, 1)[0];
+
+    // 도착
+    if (cur.gx === gTx && cur.gy === gTy) {
+      // 경로 복원
+      const path = [];
+      let n = cur;
+      while (n) {
+        path.unshift({ x: n.gx * GRID, y: n.gy * GRID });
+        n = n.parent;
+      }
+      return path;
+    }
+
+    const k = key(cur.gx, cur.gy, cur.dir);
+    if (visited.has(k) && visited.get(k) <= cur.g) continue;
+    visited.set(k, cur.g);
+
+    // 4방향 탐색
+    for (let d = 0; d < 4; d++) {
+      const [dx, dy] = dirVec[d];
+      const ngx = cur.gx + dx;
+      const ngy = cur.gy + dy;
+      if (ngx < minGX || ngx > maxGX || ngy < minGY || ngy > maxGY) continue;
+      if (isBlocked(ngx, ngy)) continue;
+
+      // 비용: 1 + 방향 바뀌면 CORNER_COST
+      const turnCost = (cur.dir !== d) ? CORNER_COST : 0;
+      const ng = cur.g + 1 + turnCost;
+
+      const nk = key(ngx, ngy, d);
+      if (visited.has(nk) && visited.get(nk) <= ng) continue;
+
+      heap.push({ gx:ngx, gy:ngy, dir:d, g:ng, parent:cur });
+    }
+  }
+  return null; // 경로 없음
+};
+
+// ═══════════════════════════════════════════════════════════════
+// MULTI-LINE PARALLEL OFFSET
+// 같은 source-target 쌍 또는 같은 segment 공유 시 4px 평행 분산
+// ═══════════════════════════════════════════════════════════════
+const applyParallelOffset = (pts, edgeId, allEdges, source, target) => {
+  // 같은 source-target 쌍의 edge들
+  const siblings = allEdges.filter(e =>
+    (e.source === source && e.target === target) ||
+    (e.source === target && e.target === source)
+  );
+  if (siblings.length <= 1) return pts;
+
+  const idx = siblings.findIndex(e => e.id === edgeId);
+  if (idx === -1) return pts;
+
+  // 가운데를 기준으로 ±offset
+  const N = siblings.length;
+  const offset = (idx - (N - 1) / 2) * PARALLEL_GAP;
+  if (Math.abs(offset) < 0.5) return pts;
+
+  // 첫/끝 점은 그대로, 중간 점들에 offset 적용
+  // 수평 세그먼트 → y에 offset, 수직 세그먼트 → x에 offset
+  if (pts.length < 3) return pts;
+  const result = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const prev = pts[i-1], curr = pts[i], next = pts[i+1];
+    // 이전 세그먼트가 수평이면 curr.y에 offset
+    const prevHoriz = Math.abs(prev.y - curr.y) < 2;
+    // 다음 세그먼트가 수평이면 curr도 같은 y 유지
+    const nextHoriz = Math.abs(curr.y - next.y) < 2;
+    let nx = curr.x, ny = curr.y;
+    if (prevHoriz && !nextHoriz) ny = curr.y + offset;
+    else if (!prevHoriz && nextHoriz) ny = curr.y + offset;
+    if (!prevHoriz && nextHoriz) nx = curr.x + offset;
+    else if (prevHoriz && !nextHoriz) nx = curr.x + offset;
+    result.push({ x: nx, y: ny });
+  }
+  result.push(pts[pts.length-1]);
+  return result;
 };
 
 // ── 경로 정규화 (스냅 + 중복 제거 + 직선 병합) ───────────
@@ -1638,7 +1795,7 @@ const PipeEdge = ({
   source,target,
   data,selected,
 }) => {
-  const {getNodes}=useReactFlow();
+  const {getNodes, getEdges}=useReactFlow();
 
   const lt        = data?.lineType||"Piping";
   const ls        = LINE_STYLE[lt]||LINE_STYLE.Piping;
@@ -1658,29 +1815,71 @@ const PipeEdge = ({
   const icColor     = icStatusColor[icStatus]||"#64748B";
 
   // 장애물 수집 (Area 제외, source/target 제외)
+  // bbox에 PADDING 추가
   const obstacles = useMemo(()=>
     getNodes()
       .filter(n=>n.id!==source&&n.id!==target&&n.type!=="area")
       .map(n=>({
-        x1:(n.position?.x||0)-MARGIN,
-        y1:(n.position?.y||0)-MARGIN,
-        x2:(n.position?.x||0)+(n.width||120)+MARGIN,
-        y2:(n.position?.y||0)+(n.height||60)+MARGIN,
+        x1:(n.position?.x||0)-PADDING,
+        y1:(n.position?.y||0)-PADDING,
+        x2:(n.position?.x||0)+(n.width||120)+PADDING,
+        y2:(n.position?.y||0)+(n.height||60)+PADDING,
       }))
   ,[source,target,getNodes]);
 
   const storedWp = data?.waypoints||[];
+  const isDragging = data?._dragging===true;
 
-  // 경로: routePipe → (수동wp 없을 때만) avoidObstacles
+  // 경로 계산:
+  //  - 수동 waypoints 있음 → 그대로 사용
+  //  - 드래그 중 → 빠른 L-shape 라우팅 (avoidObstacles)
+  //  - 정상 상태 → A* 정밀 라우팅 (실패 시 L-shape 폴백)
   const pts = useMemo(()=>{
-    const raw=routePipe(
-      sourceX,sourceY,sourcePosition||"right",
-      targetX,targetY,targetPosition||"left",
-      storedWp
+    if (storedWp.length > 0) {
+      const raw = routePipe(
+        sourceX, sourceY, sourcePosition||"right",
+        targetX, targetY, targetPosition||"left",
+        storedWp
+      );
+      return raw;
+    }
+
+    if (isDragging) {
+      // 빠른 휴리스틱
+      const raw = routePipe(
+        sourceX, sourceY, sourcePosition||"right",
+        targetX, targetY, targetPosition||"left",
+        []
+      );
+      return avoidObstacles(raw, obstacles);
+    }
+
+    // A* 정밀 라우팅
+    const aStar = findPathAStar(
+      sourceX, sourceY, sourcePosition||"right",
+      targetX, targetY, targetPosition||"left",
+      obstacles
     );
-    return storedWp.length>0 ? raw : avoidObstacles(raw,obstacles);
-  },[sourceX,sourceY,sourcePosition,targetX,targetY,targetPosition,
-     storedWp,obstacles]);
+    if (aStar && aStar.length >= 2) {
+      // grid 결과를 정규화
+      const normalized = normalizePath(aStar);
+      // 평행 offset 적용
+      const offset = applyParallelOffset(
+        normalized, id, getEdges(), source, target
+      );
+      return offset;
+    }
+
+    // A* 실패 → L-shape 폴백
+    const raw = routePipe(
+      sourceX, sourceY, sourcePosition||"right",
+      targetX, targetY, targetPosition||"left",
+      []
+    );
+    return avoidObstacles(raw, obstacles);
+  },[id,source,target,sourceX,sourceY,sourcePosition,
+     targetX,targetY,targetPosition,storedWp,obstacles,
+     isDragging,getEdges]);
 
   const path = buildElbowPath(pts);
   const segs = getSegments(pts);
@@ -2943,8 +3142,24 @@ const CanvasInner = () => {
   const onEdgeClick=useCallback((_,e)=>setSel(e),[]);
   const onPaneClick=useCallback(()=>setSel(null),[]);
 
-  // ── Smart Guide: 드래그 중 정렬선 계산 + 스냅 ──────────────
+  // ── Live re-routing: 드래그 시작 시 연결 엣지에 _dragging 플래그 ──
+  const rafIdRef = useRef(null);
+  const onNodeDragStart = useCallback((_, dragNode) => {
+    setEdges(es => es.map(e =>
+      (e.source === dragNode.id || e.target === dragNode.id)
+        ? { ...e, data: { ...e.data, _dragging: true } }
+        : e
+    ));
+  }, [setEdges]);
+
+  // ── Smart Guide + Live re-routing (60fps RAF throttle) ──────────
   const onNodeDrag = useCallback((_evt, dragNode) => {
+    // RAF로 throttle — 16ms당 1회만 처리
+    if (rafIdRef.current) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+    });
+
     const others = nodes.filter(n => n.id !== dragNode.id && n.type !== "area");
     if (others.length === 0) { setGuides([]); return; }
 
@@ -2956,52 +3171,33 @@ const CanvasInner = () => {
       const oa = getNodeAnchors(other);
       const canvasW = 16000, canvasH = 16000;
 
-      // ── 수직 정렬 (x 기준) ──────────────────────────────
       const xPairs = [
-        [da.left,    oa.left,    "left-left"],
-        [da.left,    oa.centerX, "left-center"],
-        [da.left,    oa.right,   "left-right"],
-        [da.centerX, oa.left,    "center-left"],
-        [da.centerX, oa.centerX, "center-center"],
-        [da.centerX, oa.right,   "center-right"],
-        [da.right,   oa.left,    "right-left"],
-        [da.right,   oa.centerX, "right-center"],
-        [da.right,   oa.right,   "right-right"],
+        [da.left, oa.left], [da.left, oa.centerX], [da.left, oa.right],
+        [da.centerX, oa.left], [da.centerX, oa.centerX], [da.centerX, oa.right],
+        [da.right, oa.left], [da.right, oa.centerX], [da.right, oa.right],
       ];
       xPairs.forEach(([dv, ov]) => {
         if (Math.abs(dv - ov) <= GUIDE_TOL) {
-          if (snapX === null) snapX = ov - (dv - da.left) ; // 보정값
-          newGuides.push({
-            x1: ov, y1: 0, x2: ov, y2: canvasH,
-          });
+          if (snapX === null) snapX = ov - (dv - da.left);
+          newGuides.push({ x1: ov, y1: 0, x2: ov, y2: canvasH });
         }
       });
 
-      // ── 수평 정렬 (y 기준) ──────────────────────────────
       const yPairs = [
-        [da.top,     oa.top,     "top-top"],
-        [da.top,     oa.middleY, "top-middle"],
-        [da.top,     oa.bottom,  "top-bottom"],
-        [da.middleY, oa.top,     "middle-top"],
-        [da.middleY, oa.middleY, "middle-middle"],
-        [da.middleY, oa.bottom,  "middle-bottom"],
-        [da.bottom,  oa.top,     "bottom-top"],
-        [da.bottom,  oa.middleY, "bottom-middle"],
-        [da.bottom,  oa.bottom,  "bottom-bottom"],
+        [da.top, oa.top], [da.top, oa.middleY], [da.top, oa.bottom],
+        [da.middleY, oa.top], [da.middleY, oa.middleY], [da.middleY, oa.bottom],
+        [da.bottom, oa.top], [da.bottom, oa.middleY], [da.bottom, oa.bottom],
       ];
       yPairs.forEach(([dv, ov]) => {
         if (Math.abs(dv - ov) <= GUIDE_TOL) {
           if (snapY === null) snapY = ov - (dv - da.top);
-          newGuides.push({
-            x1: 0, y1: ov, x2: canvasW, y2: ov,
-          });
+          newGuides.push({ x1: 0, y1: ov, x2: canvasW, y2: ov });
         }
       });
     });
 
     setGuides(newGuides);
 
-    // 스냅 적용
     if (snapX !== null || snapY !== null) {
       setNodes(ns => ns.map(n => {
         if (n.id !== dragNode.id) return n;
@@ -3042,11 +3238,14 @@ const CanvasInner = () => {
     setTimeout(()=>setSaveMsg(""),3000);
   },[setNodes]);
 
-  const onNodeDragStop = useCallback((_, dragNode) => {    setGuides([]);
-    // 이동된 노드에 연결된 엣지의 waypoints 초기화 → 자동 재라우팅
+  const onNodeDragStop = useCallback((_, dragNode) => {
+    setGuides([]);
+    // 드래그 종료 → _dragging 해제 + waypoints 초기화 (A* 재계산)
     setEdges(es => es.map(e => {
       if (e.source === dragNode.id || e.target === dragNode.id) {
-        return { ...e, data: { ...e.data, waypoints: [] } };
+        const newData = { ...e.data, waypoints: [] };
+        delete newData._dragging;
+        return { ...e, data: newData };
       }
       return e;
     }));
@@ -3223,6 +3422,7 @@ const CanvasInner = () => {
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
+              onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
               onNodeDragStop={onNodeDragStop}
               nodeTypes={nodeTypes} edgeTypes={edgeTypes}
