@@ -349,20 +349,18 @@ const exportToExcel = async (nodes, edges) => {
   nodes.forEach(n => {
     const d = n.data || {};
     const area = getAreaOf(n, nodes);
-    const areaLabel = area
-      ? (area.data?.label
-          ? `[${area.data.areaType}] ${area.data.label}`
-          : `[${area.data.areaType}]`)
-      : "";
+    // 소속 Area 이름만 (title 태그 제외)
+    const areaLabel = area?.data?.label || "";
     (d.requirements || []).forEach(r => {
       reqRows.push({
         "Node ID":      n.id,
         "Item No.":     d.itemNo || d.label || "",
-        "설비 유형":     n.type,
         "소속 Area":     areaLabel,
         "Stakeholder":  r.who  || "",
         "날짜":          r.date || "",
         "요구사항":       r.text || "",
+        "담당자":         r.assignee || "",
+        "검토결과":       r.review   || "",
       });
     });
   });
@@ -549,7 +547,7 @@ const exportToExcel = async (nodes, edges) => {
 
   // ── SHEET 4: Requirements ──────────────────────────────────
   const rqHdrs = [
-    "Item No.","설비 유형","소속 Area","Stakeholder","날짜","요구사항",
+    "Item No.","소속 Area","Stakeholder","날짜","요구사항","담당자","검토결과",
   ];
   const rqAoa = [
     [Object.assign(XS.hdr("Requirements"), {
@@ -558,9 +556,9 @@ const exportToExcel = async (nodes, edges) => {
     rqHdrs.map(h => XS.shdr(h)),
     ...reqRows.map((row,i) => rqHdrs.map((h) => {
       const v = row[h] ?? "";
-      const wrap = h==="요구사항";
+      const wrap = h==="요구사항" || h==="검토결과";
       return XS.alt(v, i,
-        { h: h==="요구사항"?"left":"center", wrap,
+        { h: (h==="요구사항"||h==="검토결과")?"left":"center", wrap,
           bold: h==="Item No.", fc: h==="Item No."?"1D4ED8":"000000" });
     })),
     ...(reqRows.length===0 ? [[XS.c("등록된 요구사항이 없습니다.",
@@ -570,7 +568,7 @@ const exportToExcel = async (nodes, edges) => {
   wsRq["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:rqHdrs.length-1} }];
   wsRq["!rows"] = [{hpt:28},{hpt:22},...reqRows.map(()=>({hpt:36}))];
   wsRq["!cols"] = [
-    {wch:14},{wch:14},{wch:22},{wch:16},{wch:12},{wch:42},
+    {wch:14},{wch:22},{wch:16},{wch:12},{wch:42},{wch:14},{wch:32},
   ];
 
   XLSX.utils.book_append_sheet(wb, wsIC,  "IC Register");
@@ -719,6 +717,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               text: String(r["요구사항"]   || ""),
               who:  String(r["Stakeholder"]|| ""),
               date: String(r["날짜"]        || ""),
+              assignee: String(r["담당자"]    || ""),
+              review:   String(r["검토결과"]  || ""),
             });
           });
           updatedNodes = updatedNodes.map(n => {
@@ -2160,6 +2160,7 @@ const Sidebar = memo(({ onDragStart }) => {
 // ─────────────────────────────────────────────────────────────
 const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,onAddHandle }) => {
   const [reqText,setReqText]=useState(""), [reqWho,setReqWho]=useState(""), [reqDate,setReqDate]=useState(new Date().toISOString().slice(0,10));
+  const [reqAssignee,setReqAssignee]=useState(""), [reqReview,setReqReview]=useState("");
   const [tab,setTab]=useState("spec");
   const L={fontSize:11,color:"#64748b",marginBottom:2,display:"block",fontWeight:500};
   const I={width:"100%",padding:"4px 7px",border:"1px solid #e2e8f0",borderRadius:4,fontSize:12,boxSizing:"border-box",marginBottom:7};
@@ -2184,8 +2185,12 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
   const upE=(k,v)=>onUpdateEdge(sel.id,{...d,[k]:v});
   const addReq=()=>{
     if(!reqText.trim()) return;
-    const reqs=[...(d.requirements||[]),{id:Date.now(),text:reqText,who:reqWho,date:reqDate}];
-    onUpdateNode(sel.id,{...d,requirements:reqs}); setReqText(""); setReqWho("");
+    const reqs=[...(d.requirements||[]),{
+      id:Date.now(), text:reqText, who:reqWho, date:reqDate,
+      assignee:reqAssignee, review:reqReview,
+    }];
+    onUpdateNode(sel.id,{...d,requirements:reqs});
+    setReqText(""); setReqWho(""); setReqAssignee(""); setReqReview("");
   };
   const connEdges=edges.filter(e=>e.source===sel.id||e.target===sel.id);
   const ifaceList=connEdges.map(e=>{
@@ -2460,6 +2465,20 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                   <span style={{ color:"#a16207",fontSize:10 }}>{r.date}</span>
                 </div>
                 <div style={{ color:"#1c1917",lineHeight:1.4 }}>{r.text}</div>
+                {(r.assignee || r.review) && (
+                  <div style={{ marginTop:4,paddingTop:4,borderTop:"1px dashed #fde68a" }}>
+                    {r.assignee && (
+                      <div style={{ fontSize:10,color:"#1e40af",marginBottom:1 }}>
+                        <span style={{ fontWeight:600 }}>담당자:</span> {r.assignee}
+                      </div>
+                    )}
+                    {r.review && (
+                      <div style={{ fontSize:10,color:"#166534",lineHeight:1.4 }}>
+                        <span style={{ fontWeight:600 }}>검토결과:</span> {r.review}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <button onClick={()=>{ const rs=(d.requirements||[]).filter(x=>x.id!==r.id); onUpdateNode(sel.id,{...d,requirements:rs}); }}
                   style={{ background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:10,padding:"2px 0",marginTop:2 }}>× remove</button>
               </div>
@@ -2469,6 +2488,8 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
               <textarea style={{ ...I,height:56,resize:"vertical" }} placeholder="Requirement..." value={reqText} onChange={e=>setReqText(e.target.value)}/>
               <input style={I} placeholder="Stakeholder" value={reqWho} onChange={e=>setReqWho(e.target.value)}/>
               <input type="date" style={I} value={reqDate} onChange={e=>setReqDate(e.target.value)}/>
+              <input style={I} placeholder="담당자" value={reqAssignee} onChange={e=>setReqAssignee(e.target.value)}/>
+              <textarea style={{ ...I,height:40,resize:"vertical" }} placeholder="검토결과" value={reqReview} onChange={e=>setReqReview(e.target.value)}/>
               <button onClick={addReq} style={{ width:"100%",padding:"6px",background:"#1d4ed8",color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:12,fontWeight:700 }}>+ ADD Requirement</button>
             </div>
           </>
