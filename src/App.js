@@ -1481,15 +1481,32 @@ const portVec = pos => {
 // 출력: orthogonal path 포인트 배열 (없으면 null)
 // ═══════════════════════════════════════════════════════════════
 const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
-  // 좌표를 grid 단위로 변환
-  const gSx = Math.round(sx / GRID), gSy = Math.round(sy / GRID);
-  const gTx = Math.round(tx / GRID), gTy = Math.round(ty / GRID);
+  // 시작점에서 포트 방향으로 살짝 이탈한 지점부터 탐색 (장애물 안 진입 방지)
+  const sv = portVec(sDir);
+  const tv = portVec(tDir);
+  const startX = sx + sv.dx * GRID;
+  const startY = sy + sv.dy * GRID;
+  const endX   = tx + tv.dx * GRID;
+  const endY   = ty + tv.dy * GRID;
 
-  // bounds 제한 (탐색 영역) — 시작/끝 주변 +/-200 cells
-  const minGX = Math.min(gSx, gTx) - 30;
-  const maxGX = Math.max(gSx, gTx) + 30;
-  const minGY = Math.min(gSy, gTy) - 30;
-  const maxGY = Math.max(gSy, gTy) + 30;
+  // 좌표를 grid 단위로 변환
+  const gSx = Math.round(startX / GRID), gSy = Math.round(startY / GRID);
+  const gTx = Math.round(endX / GRID),   gTy = Math.round(endY / GRID);
+
+  // 탐색 범위: src/tgt + 모든 장애물을 포함하도록 확장
+  let minGX = Math.min(gSx, gTx);
+  let maxGX = Math.max(gSx, gTx);
+  let minGY = Math.min(gSy, gTy);
+  let maxGY = Math.max(gSy, gTy);
+  for (const o of obstacles) {
+    minGX = Math.min(minGX, Math.floor(o.x1 / GRID));
+    maxGX = Math.max(maxGX, Math.ceil(o.x2 / GRID));
+    minGY = Math.min(minGY, Math.floor(o.y1 / GRID));
+    maxGY = Math.max(maxGY, Math.ceil(o.y2 / GRID));
+  }
+  // 여유 추가
+  minGX -= 8; maxGX += 8;
+  minGY -= 8; maxGY += 8;
 
   // 장애물을 grid 단위로 미리 변환
   const gObs = obstacles.map(o => ({
@@ -1514,15 +1531,15 @@ const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
 
   const startDir = posToDir(sDir);
 
-  // Heap (배열 기반 우선순위 큐, 단순 구현)
+  // 우선순위 큐 (배열 기반)
   const heap = [];
-  const key = (gx,gy,d) => `${gx},${gy},${d}`;
   const visited = new Map();
+  const key = (gx,gy,d) => `${gx},${gy},${d}`;
 
   heap.push({ gx:gSx, gy:gSy, dir:startDir, g:0, parent:null });
 
   let iter = 0;
-  const MAX_ITER = 8000; // 안전 제한 — 60fps 유지
+  const MAX_ITER = 12000;
 
   while (heap.length > 0 && iter < MAX_ITER) {
     iter++;
@@ -1539,13 +1556,17 @@ const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
 
     // 도착
     if (cur.gx === gTx && cur.gy === gTy) {
-      // 경로 복원
-      const path = [];
+      // 경로 복원: 시작점/끝점 stub 포함
+      const path = [{ x: sx, y: sy }]; // 실제 src 포트
       let n = cur;
+      const grid = [];
       while (n) {
-        path.unshift({ x: n.gx * GRID, y: n.gy * GRID });
+        grid.unshift({ x: n.gx * GRID, y: n.gy * GRID });
         n = n.parent;
       }
+      // grid 경로 추가 + 끝점 stub
+      grid.forEach(p => path.push(p));
+      path.push({ x: tx, y: ty });
       return path;
     }
 
@@ -1561,7 +1582,6 @@ const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
       if (ngx < minGX || ngx > maxGX || ngy < minGY || ngy > maxGY) continue;
       if (isBlocked(ngx, ngy)) continue;
 
-      // 비용: 1 + 방향 바뀌면 CORNER_COST
       const turnCost = (cur.dir !== d) ? CORNER_COST : 0;
       const ng = cur.g + 1 + turnCost;
 
@@ -1571,7 +1591,7 @@ const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
       heap.push({ gx:ngx, gy:ngy, dir:d, g:ng, parent:cur });
     }
   }
-  return null; // 경로 없음
+  return null;
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -1815,17 +1835,28 @@ const PipeEdge = ({
   const icColor     = icStatusColor[icStatus]||"#64748B";
 
   // 장애물 수집 (Area 제외, source/target 제외)
-  // bbox에 PADDING 추가
+  // bbox에 PADDING 추가, 실제 렌더된 노드 크기 사용
+  const allNodesSnapshot = getNodes();
   const obstacles = useMemo(()=>
-    getNodes()
+    allNodesSnapshot
       .filter(n=>n.id!==source&&n.id!==target&&n.type!=="area")
-      .map(n=>({
-        x1:(n.position?.x||0)-PADDING,
-        y1:(n.position?.y||0)-PADDING,
-        x2:(n.position?.x||0)+(n.width||120)+PADDING,
-        y2:(n.position?.y||0)+(n.height||60)+PADDING,
-      }))
-  ,[source,target,getNodes]);
+      .map(n=>{
+        const x = n.position?.x||0;
+        const y = n.position?.y||0;
+        // 실제 측정값 우선: measured > width > style.width > 기본
+        const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
+        const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
+        return {
+          x1: x - PADDING,
+          y1: y - PADDING,
+          x2: x + w + PADDING,
+          y2: y + h + PADDING,
+        };
+      })
+  ,[source, target,
+    // 모든 비-source/target 노드 위치를 의존성에 포함 → 노드 이동 시 재계산
+    allNodesSnapshot.map(n => `${n.id}:${n.position?.x},${n.position?.y}:${n.measured?.width||n.width||0}x${n.measured?.height||n.height||0}`).join("|"),
+  ]);
 
   const storedWp = data?.waypoints||[];
   const isDragging = data?._dragging===true;
