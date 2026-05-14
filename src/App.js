@@ -4,7 +4,7 @@
 // React + ReactFlow  |  package.json: "reactflow": "^11.11.4"
 // ============================================================
 
-import React, { useState, useCallback, useRef, useEffect, memo } from "react";
+import React, { useState, useCallback, useRef, useEffect, useMemo, memo } from "react";
 import ReactFlow, {
   ReactFlowProvider,
   addEdge,
@@ -1444,204 +1444,187 @@ const InstrumentNode = memo(({ data, selected }) => (
 //  ⑤ 라벨: 가장 긴 세그먼트 중앙
 // ═══════════════════════════════════════════════════════════════
 
-const ELBOW_R = 4;   // 꺾임 반경 줄임 (기존 6→4)
-const STUB    = 16;  // 포트 이탈 거리 줄임 (기존 30→16)
+const ELBOW_R   = 4;   // 꺾임 반경
+const MIN_STUB  = 20;  // 1번 요건: 포트 이후 최소 직선 길이 (육안 확인 가능)
+const MARGIN    = 24;  // 장애물 여백
+const SNAP_TOL  = 6;
 
-// ── 포트 방향 → 이탈 벡터 ────────────────────────────────────
+// ── 포트 방향 벡터 ──────────────────────────────────────────
 const portVec = pos => {
-  if (pos === "right")  return { dx: 1, dy: 0 };
-  if (pos === "left")   return { dx:-1, dy: 0 };
-  if (pos === "bottom") return { dx: 0, dy: 1 };
-  if (pos === "top")    return { dx: 0, dy:-1 };
-  return { dx: 1, dy: 0 };
+  if (pos==="right")  return {dx:1,dy:0};
+  if (pos==="left")   return {dx:-1,dy:0};
+  if (pos==="bottom") return {dx:0,dy:1};
+  if (pos==="top")    return {dx:0,dy:-1};
+  return {dx:1,dy:0};
 };
 
-// ── 경로 정규화 ───────────────────────────────────────────────
-// 두 가지 처리:
-//  1) 스냅: 거의 같은 x 또는 y 좌표(≤ SNAP_TOL)를 정확히 일치시킴
-//  2) 병합: 연속된 같은 방향 세그먼트의 중간 waypoint 제거
-const SNAP_TOL = 8; // px — 이 이내면 동일 좌표로 정렬
-
-const normalizePath = (pts) => {
-  if (!pts || pts.length < 2) return pts;
-
-  // Step 1: 이웃한 포인트끼리 x/y 오차가 SNAP_TOL 이하면 정렬
-  // 직전 세그먼트의 방향에 따라 수직 좌표만 맞춤
-  const snapped = pts.map((p, i) => ({ ...p }));
-  for (let i = 1; i < snapped.length; i++) {
-    const prev = snapped[i - 1];
-    const curr = snapped[i];
-    // 수평으로 이동하려는 세그먼트: y가 거의 같으면 prev.y로 맞춤
-    if (Math.abs(curr.y - prev.y) <= SNAP_TOL && Math.abs(curr.x - prev.x) > SNAP_TOL) {
-      snapped[i] = { x: curr.x, y: prev.y };
-    }
-    // 수직으로 이동하려는 세그먼트: x가 거의 같으면 prev.x로 맞춤
-    if (Math.abs(curr.x - prev.x) <= SNAP_TOL && Math.abs(curr.y - prev.y) > SNAP_TOL) {
-      snapped[i] = { x: prev.x, y: curr.y };
-    }
+// ── 경로 정규화 (스냅 + 중복 제거 + 직선 병합) ───────────
+const normalizePath = pts => {
+  if (!pts||pts.length<2) return pts||[];
+  // Step1: 인접 좌표 스냅
+  const s = pts.map(p=>({...p}));
+  for (let i=1;i<s.length;i++) {
+    const p=s[i-1],c=s[i];
+    if (Math.abs(c.y-p.y)<=SNAP_TOL && Math.abs(c.x-p.x)>SNAP_TOL) s[i]={x:c.x,y:p.y};
+    if (Math.abs(c.x-p.x)<=SNAP_TOL && Math.abs(c.y-p.y)>SNAP_TOL) s[i]={x:p.x,y:c.y};
   }
-
-  // Step 2: 완전히 중복된 점 제거
-  const deduped = snapped.filter((p, i) =>
-    i === 0 || Math.hypot(p.x - snapped[i-1].x, p.y - snapped[i-1].y) > 0.5
-  );
-
-  // Step 3: 세 점이 일직선(같은 x 또는 같은 y 연속)이면 중간 점 제거
-  // 예) (100,50) → (100,50) → (200,50) : 세 점이 수평 → 중간 제거
-  let merged = [deduped[0]];
-  for (let i = 1; i < deduped.length - 1; i++) {
-    const prev = merged[merged.length - 1];
-    const curr = deduped[i];
-    const next = deduped[i + 1];
-    // prev→curr와 curr→next가 같은 방향이면 curr는 불필요
-    const sameDirX = Math.abs(prev.y - curr.y) < 0.5 && Math.abs(curr.y - next.y) < 0.5;
-    const sameDirY = Math.abs(prev.x - curr.x) < 0.5 && Math.abs(curr.x - next.x) < 0.5;
-    if (!sameDirX && !sameDirY) {
-      merged.push(curr);
-    }
+  // Step2: 중복 제거
+  const d = s.filter((p,i)=>i===0||Math.hypot(p.x-s[i-1].x,p.y-s[i-1].y)>0.5);
+  // Step3: 직선 병합
+  const m=[d[0]];
+  for (let i=1;i<d.length-1;i++){
+    const a=m[m.length-1],c=d[i],n=d[i+1];
+    if (!(Math.abs(a.y-c.y)<0.5&&Math.abs(c.y-n.y)<0.5)
+      &&!(Math.abs(a.x-c.x)<0.5&&Math.abs(c.x-n.x)<0.5)) m.push(c);
   }
-  merged.push(deduped[deduped.length - 1]);
-
-  return merged;
+  m.push(d[d.length-1]);
+  return m;
 };
 
-// ── 포트방향 인식 직각 라우팅 (개선) ─────────────────────────
-// 핵심 개선:
-//  ① stub 길이를 거리에 비례해서 동적 계산 → 교차 방지
-//  ② 반대 방향 포트(left↔right, top↔bottom) 직결 최적화
-//  ③ 같은 방향 포트(right→right 등) U턴 처리
-const routePipe = (sx, sy, srcPos, tx, ty, tgtPos, storedWp) => {
-  if (storedWp && storedWp.length > 0) {
-    return normalizePath([{ x:sx,y:sy }, ...storedWp, { x:tx,y:ty }]);
-  }
+// ── 1 + 2번 요건: 기본 라우팅 + 모든 세그먼트에 중앙 waypoint ─
+// MIN_STUB로 포트에서 직선 이탈 후 꺾임, 각 세그먼트 중앙에 wp 자동 삽입
+const routePipe = (sx,sy,srcPos,tx,ty,tgtPos,storedWp) => {
+  // 수동 waypoints 있으면 정규화만
+  if (storedWp&&storedWp.length>0)
+    return normalizePath([{x:sx,y:sy},...storedWp,{x:tx,y:ty}]);
 
-  const sv   = portVec(srcPos);
-  const tv   = portVec(tgtPos);
+  const sv=portVec(srcPos), tv=portVec(tgtPos);
+  const stub = MIN_STUB; // 고정 최소 stub
 
-  // 두 포트 간 거리에 비례한 stub 계산
-  const dist = Math.hypot(tx-sx, ty-sy);
-  const stub = Math.max(8, Math.min(STUB, dist * 0.18));
-
-  const sx2  = sx + sv.dx * stub;
-  const sy2  = sy + sv.dy * stub;
-  const tx2  = tx + tv.dx * stub;
-  const ty2  = ty + tv.dy * stub;
+  // stub 끝점
+  const sx2=sx+sv.dx*stub, sy2=sy+sv.dy*stub;
+  const tx2=tx+tv.dx*stub, ty2=ty+tv.dy*stub;
 
   let raw;
-
-  // ── 케이스 1: 수평 출발·수평 도착 (right→left / left→right) ──
-  if (sv.dy === 0 && tv.dy === 0) {
-    if (Math.abs(sy - ty) < 2) {
-      // 같은 y → 단순 수평 직선
-      raw = [{ x:sx,y:sy }, { x:tx,y:ty }];
-    } else if ((sv.dx > 0 && tx > sx) || (sv.dx < 0 && tx < sx)) {
-      // 반대 방향 → 가운데에서 수직 연결
-      const mx2 = (sx2 + tx2) / 2;
-      raw = [
-        { x:sx,  y:sy  },
-        { x:mx2, y:sy  },
-        { x:mx2, y:ty  },
-        { x:tx,  y:ty  },
-      ];
+  // 수평 출발 ↔ 수평 도착
+  if (sv.dy===0 && tv.dy===0) {
+    if (Math.abs(sy-ty)<2) {
+      raw=[{x:sx,y:sy},{x:tx,y:ty}];
+    } else if ((sv.dx>0&&tx>sx)||(sv.dx<0&&tx<sx)) {
+      const mx=(sx2+tx2)/2;
+      raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:mx,y:sy2},{x:mx,y:ty2},{x:tx2,y:ty2},{x:tx,y:ty}];
     } else {
-      // U턴 (같은 방향 포트)
-      const ux = sv.dx > 0
-        ? Math.max(sx2, tx2) + stub
-        : Math.min(sx2, tx2) - stub;
-      raw = [
-        { x:sx,  y:sy  },
-        { x:ux,  y:sy  },
-        { x:ux,  y:ty  },
-        { x:tx,  y:ty  },
-      ];
+      const ux=sv.dx>0?Math.max(sx2,tx2)+stub:Math.min(sx2,tx2)-stub;
+      raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:ux,y:sy2},{x:ux,y:ty2},{x:tx2,y:ty2},{x:tx,y:ty}];
     }
   }
-  // ── 케이스 2: 수직 출발·수직 도착 (bottom→top / top→bottom) ──
-  else if (sv.dx === 0 && tv.dx === 0) {
-    if (Math.abs(sx - tx) < 2) {
-      raw = [{ x:sx,y:sy }, { x:tx,y:ty }];
-    } else if ((sv.dy > 0 && ty > sy) || (sv.dy < 0 && ty < sy)) {
-      const my2 = (sy2 + ty2) / 2;
-      raw = [
-        { x:sx,  y:sy  },
-        { x:sx,  y:my2 },
-        { x:tx,  y:my2 },
-        { x:tx,  y:ty  },
-      ];
+  // 수직 출발 ↔ 수직 도착
+  else if (sv.dx===0 && tv.dx===0) {
+    if (Math.abs(sx-tx)<2) {
+      raw=[{x:sx,y:sy},{x:tx,y:ty}];
+    } else if ((sv.dy>0&&ty>sy)||(sv.dy<0&&ty<sy)) {
+      const my=(sy2+ty2)/2;
+      raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:sx2,y:my},{x:tx2,y:my},{x:tx2,y:ty2},{x:tx,y:ty}];
     } else {
-      const uy = sv.dy > 0
-        ? Math.max(sy2, ty2) + stub
-        : Math.min(sy2, ty2) - stub;
-      raw = [
-        { x:sx,  y:sy  },
-        { x:sx,  y:uy  },
-        { x:tx,  y:uy  },
-        { x:tx,  y:ty  },
-      ];
+      const uy=sv.dy>0?Math.max(sy2,ty2)+stub:Math.min(sy2,ty2)-stub;
+      raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:sx2,y:uy},{x:tx2,y:uy},{x:tx2,y:ty2},{x:tx,y:ty}];
     }
   }
-  // ── 케이스 3: 수평 출발·수직 도착 (right/left → top/bottom) ──
-  else if (sv.dy === 0 && tv.dx === 0) {
-    // src에서 수평으로 tx까지, 그 다음 수직으로 ty까지
-    raw = [
-      { x:sx,  y:sy  },
-      { x:tx,  y:sy  },
-      { x:tx,  y:ty  },
-    ];
+  // 수평 출발 → 수직 도착
+  else if (sv.dy===0 && tv.dx===0) {
+    raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:tx2,y:sy2},{x:tx2,y:ty2},{x:tx,y:ty}];
   }
-  // ── 케이스 4: 수직 출발·수평 도착 (top/bottom → right/left) ──
+  // 수직 출발 → 수평 도착
   else {
-    // src에서 수직으로 ty까지, 그 다음 수평으로 tx까지
-    raw = [
-      { x:sx,  y:sy  },
-      { x:sx,  y:ty  },
-      { x:tx,  y:ty  },
-    ];
+    raw=[{x:sx,y:sy},{x:sx2,y:sy2},{x:sx2,y:ty2},{x:tx2,y:ty2},{x:tx,y:ty}];
   }
 
-  return normalizePath(raw);
+  const norm = normalizePath(raw);
+
+  // 2번 요건: 각 중간 세그먼트(stub 제외)에 중앙 waypoint 삽입
+  if (norm.length < 2) return norm;
+  const withMid = [norm[0]];
+  for (let i=0;i<norm.length-1;i++){
+    const a=norm[i],b=norm[i+1];
+    const isFirst=i===0, isLast=i===norm.length-2;
+    const len=Math.hypot(b.x-a.x,b.y-a.y);
+    // stub(첫/마지막) 세그먼트는 중앙 wp 불필요
+    if (!isFirst && !isLast && len>10) {
+      withMid.push({x:(a.x+b.x)/2, y:(a.y+b.y)/2});
+    }
+    withMid.push(b);
+  }
+  return withMid;
 };
 
-// ── Rounded Elbow SVG path ────────────────────────────────────
-// 중복점 제거 → 각 꺾임점에 Q 베지어 적용
-const buildElbowPath = (pts, r = ELBOW_R) => {
-  if (!pts || pts.length < 2) return "";
+// ── 3번 요건: 장애물 지그재그 회피 ──────────────────────────
+// 세그먼트가 블록(equipment/brench/instrument)을 통과하면
+// 블록 위 또는 아래(수평) / 왼쪽 또는 오른쪽(수직)으로 지그재그 우회
+const avoidObstacles = (pts, obstacles) => {
+  if (!obstacles||obstacles.length===0) return pts;
 
-  const clean = pts.filter((p, i) =>
-    i === 0 || Math.hypot(p.x - pts[i-1].x, p.y - pts[i-1].y) > 0.5
-  );
-  if (clean.length < 2) return "";
+  // 선분과 박스 교차 여부
+  const hits = (x1,y1,x2,y2,box) => {
+    const minX=Math.min(x1,x2)-1, maxX=Math.max(x1,x2)+1;
+    const minY=Math.min(y1,y2)-1, maxY=Math.max(y1,y2)+1;
+    return !(maxX<box.x1||minX>box.x2||maxY<box.y1||minY>box.y2);
+  };
 
-  let d = `M ${clean[0].x} ${clean[0].y}`;
-  for (let i = 1; i < clean.length; i++) {
-    const prev = clean[i-1], curr = clean[i], next = clean[i+1];
-    if (!next) {
-      d += ` L ${curr.x} ${curr.y}`;
-    } else {
-      const dx1 = curr.x-prev.x, dy1 = curr.y-prev.y;
-      const dx2 = next.x-curr.x, dy2 = next.y-curr.y;
-      const l1  = Math.hypot(dx1,dy1)||1, l2 = Math.hypot(dx2,dy2)||1;
-      const rr  = Math.min(r, l1/2, l2/2);
-      d += ` L ${curr.x-(dx1/l1)*rr} ${curr.y-(dy1/l1)*rr}`;
-      d += ` Q ${curr.x} ${curr.y}`;
-      d += ` ${curr.x+(dx2/l2)*rr} ${curr.y+(dy2/l2)*rr}`;
+  let res=[...pts];
+  for (let iter=0;iter<6;iter++) {
+    let changed=false;
+    const next=[res[0]];
+    for (let i=0;i<res.length-1;i++) {
+      const a=res[i], b=res[i+1];
+      const isH=Math.abs(a.y-b.y)<2;
+      let hit=null;
+      for (const box of obstacles) {
+        if (hits(a.x,a.y,b.x,b.y,box)){hit=box;break;}
+      }
+      if (hit) {
+        changed=true;
+        if (isH) {
+          // 수평 세그먼트 → 위/아래 중 src 쪽으로 더 가까운 방향
+          const aboveY=hit.y1-MARGIN, belowY=hit.y2+MARGIN;
+          const byY=Math.abs(a.y-aboveY)<=Math.abs(a.y-belowY)?aboveY:belowY;
+          // 지그재그: a.x→byY, b.x→byY 사이에 우회 세그먼트 삽입
+          next.push({x:a.x,y:byY},{x:b.x,y:byY});
+        } else {
+          // 수직 세그먼트 → 왼/오른 중 src 쪽으로 더 가까운 방향
+          const leftX=hit.x1-MARGIN, rightX=hit.x2+MARGIN;
+          const byX=Math.abs(a.x-leftX)<=Math.abs(a.x-rightX)?leftX:rightX;
+          next.push({x:byX,y:a.y},{x:byX,y:b.y});
+        }
+      } else {
+        next.push(b);
+      }
+    }
+    if (!changed) break;
+    res=normalizePath(next);
+  }
+  return res;
+};
+
+// ── SVG Rounded Elbow path ────────────────────────────────────
+const buildElbowPath = (pts, r=ELBOW_R) => {
+  if (!pts||pts.length<2) return "";
+  const c=pts.filter((p,i)=>i===0||Math.hypot(p.x-pts[i-1].x,p.y-pts[i-1].y)>0.5);
+  if (c.length<2) return "";
+  let d=`M ${c[0].x} ${c[0].y}`;
+  for (let i=1;i<c.length;i++){
+    const p=c[i-1],q=c[i],n=c[i+1];
+    if (!n){d+=` L ${q.x} ${q.y}`;}
+    else {
+      const dx1=q.x-p.x,dy1=q.y-p.y,dx2=n.x-q.x,dy2=n.y-q.y;
+      const l1=Math.hypot(dx1,dy1)||1,l2=Math.hypot(dx2,dy2)||1;
+      const rr=Math.min(r,l1/2,l2/2);
+      d+=` L ${q.x-(dx1/l1)*rr} ${q.y-(dy1/l1)*rr}`;
+      d+=` Q ${q.x} ${q.y} ${q.x+(dx2/l2)*rr} ${q.y+(dy2/l2)*rr}`;
     }
   }
   return d;
 };
 
-// ── 세그먼트 목록 추출 ──────────────────────────────────────
-// [{x1,y1,x2,y2, isHoriz, mx,my}]
+// ── 세그먼트 목록 ───────────────────────────────────────────
 const getSegments = pts => {
-  const segs = [];
-  for (let i = 0; i < pts.length-1; i++) {
-    const a = pts[i], b = pts[i+1];
-    const len = Math.hypot(b.x-a.x, b.y-a.y);
+  const segs=[];
+  for (let i=0;i<pts.length-1;i++){
+    const a=pts[i],b=pts[i+1];
     segs.push({
-      x1:a.x, y1:a.y, x2:b.x, y2:b.y,
-      isHoriz: Math.abs(a.y-b.y) < 2,
-      mx:(a.x+b.x)/2, my:(a.y+b.y)/2,
-      len,
+      x1:a.x,y1:a.y,x2:b.x,y2:b.y,
+      isHoriz:Math.abs(a.y-b.y)<2,
+      mx:(a.x+b.x)/2,my:(a.y+b.y)/2,
+      len:Math.hypot(b.x-a.x,b.y-a.y),
     });
   }
   return segs;
@@ -1650,196 +1633,116 @@ const getSegments = pts => {
 // ── PipeEdge ─────────────────────────────────────────────────
 const PipeEdge = ({
   id,
-  sourceX, sourceY, sourcePosition,
-  targetX, targetY, targetPosition,
-  source, target,
-  data, selected,
+  sourceX,sourceY,sourcePosition,
+  targetX,targetY,targetPosition,
+  source,target,
+  data,selected,
 }) => {
-  // getNodes로 모든 노드 bbox 참조 (장애물 회피용)
-  const { getNodes } = useReactFlow();
+  const {getNodes}=useReactFlow();
 
-  // 라인 스타일
-  const lt        = data?.lineType || "Piping";
-  const ls        = LINE_STYLE[lt] || LINE_STYLE.Piping;
-  const baseColor = data?.fluidSub ? getFluidColor(data.fluidSub) : ls.color;
-  const stroke    = selected ? "#f59e0b" : baseColor;
-  const sw        = ls.sw || 2;
+  const lt        = data?.lineType||"Piping";
+  const ls        = LINE_STYLE[lt]||LINE_STYLE.Piping;
+  const baseColor = data?.fluidSub?getFluidColor(data.fluidSub):ls.color;
+  const stroke    = selected?"#f59e0b":baseColor;
+  const sw        = ls.sw||2;
   const mkId      = `arrow_${id}`;
 
-  // IC / 라벨 데이터
-  const icStatusColor = {
-    "OPEN":"#CA8A04","IN PROGRESS":"#2563EB",
-    "CLOSED":"#16A34A","OVERDUE":"#DC2626",
-  };
-  const fluidLabel  = data?.fluidSub || "";
-  const sizeLabel   = data?.sizeNum ? `${data.sizeNum}A` : (data?.size||"");
+  const icStatusColor={"OPEN":"#CA8A04","IN PROGRESS":"#2563EB","CLOSED":"#16A34A","OVERDUE":"#DC2626"};
+  const fluidLabel  = data?.fluidSub||"";
+  const sizeLabel   = data?.sizeNum?`${data.sizeNum}A`:(data?.size||"");
   const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
   const isSpecial   = lt==="Process Gas"||lt==="Material";
   const showLabel   = isSpecial?(data?.lineText||lt):pipingLabel;
-  const icNo        = data?.ic_no    || "";
-  const icStatus    = data?.ic_status|| "";
+  const icNo        = data?.ic_no||"";
+  const icStatus    = data?.ic_status||"";
   const icColor     = icStatusColor[icStatus]||"#64748B";
 
-  // ── 장애물(Equipment) bbox 수집 ─────────────────────────
-  // Area는 통과 허용, equipment/instrument/brench는 회피
-  const allNodes = getNodes();
-  const obstacles = allNodes
-    .filter(n => n.id !== source && n.id !== target
-              && n.type !== "area")
-    .map(n => ({
-      x1: (n.position?.x||0) - 10,
-      y1: (n.position?.y||0) - 10,
-      x2: (n.position?.x||0) + (n.width||120) + 10,
-      y2: (n.position?.y||0) + (n.height||60) + 10,
-    }));
+  // 장애물 수집 (Area 제외, source/target 제외)
+  const obstacles = useMemo(()=>
+    getNodes()
+      .filter(n=>n.id!==source&&n.id!==target&&n.type!=="area")
+      .map(n=>({
+        x1:(n.position?.x||0)-MARGIN,
+        y1:(n.position?.y||0)-MARGIN,
+        x2:(n.position?.x||0)+(n.width||120)+MARGIN,
+        y2:(n.position?.y||0)+(n.height||60)+MARGIN,
+      }))
+  ,[source,target,getNodes]);
 
-  // ── 선분이 장애물과 교차하는지 검사 ──────────────────────
-  const segIntersectsBox = (x1,y1,x2,y2, box) => {
-    // 선분 bbox와 box 겹침 확인 (빠른 판별)
-    const minX=Math.min(x1,x2), maxX=Math.max(x1,x2);
-    const minY=Math.min(y1,y2), maxY=Math.max(y1,y2);
-    return !(maxX < box.x1 || minX > box.x2 || maxY < box.y1 || minY > box.y2);
-  };
-
-  // ── 장애물 회피 경로 보정 ─────────────────────────────────
-  // 자동 라우팅 결과의 각 세그먼트를 검사하여
-  // 충돌 시 우회 경유점을 삽입
-  const avoidObstacles = (pts) => {
-    if (obstacles.length === 0) return pts;
-    let result = [...pts];
-    let maxIter = 4; // 최대 반복 횟수
-    while (maxIter-- > 0) {
-      let changed = false;
-      const next = [result[0]];
-      for (let i = 0; i < result.length - 1; i++) {
-        const a = result[i], b = result[i+1];
-        const isH = Math.abs(a.y - b.y) < 2; // 수평 세그먼트
-        let hit = null;
-        for (const box of obstacles) {
-          if (segIntersectsBox(a.x, a.y, b.x, b.y, box)) {
-            hit = box; break;
-          }
-        }
-        if (hit) {
-          changed = true;
-          if (isH) {
-            // 수평 세그먼트가 박스와 충돌 → 위 또는 아래로 우회
-            const margin = 20;
-            // 위/아래 중 더 여유있는 방향
-            const aboveY = hit.y1 - margin;
-            const belowY = hit.y2 + margin;
-            const midX   = (a.x + b.x) / 2;
-            const byY    = Math.abs(a.y - aboveY) < Math.abs(a.y - belowY)
-                           ? aboveY : belowY;
-            next.push({ x:a.x,  y:byY },
-                       { x:b.x,  y:byY });
-          } else {
-            // 수직 세그먼트가 박스와 충돌 → 왼쪽 또는 오른쪽 우회
-            const margin = 20;
-            const leftX  = hit.x1 - margin;
-            const rightX = hit.x2 + margin;
-            const byX    = Math.abs(a.x - leftX) < Math.abs(a.x - rightX)
-                           ? leftX : rightX;
-            next.push({ x:byX, y:a.y },
-                       { x:byX, y:b.y });
-          }
-        } else {
-          next.push(b);
-        }
-      }
-      if (!changed) break;
-      result = normalizePath(next);
-    }
-    return result;
-  };
-
-  // ── 경로 계산 ────────────────────────────────────────────
   const storedWp = data?.waypoints||[];
-  const rawPts = routePipe(
-    sourceX, sourceY, sourcePosition||"right",
-    targetX, targetY, targetPosition||"left",
-    storedWp
-  );
-  // storedWp 없을 때만 장애물 회피 적용
-  const pts  = storedWp.length > 0 ? rawPts : avoidObstacles(rawPts);
+
+  // 경로: routePipe → (수동wp 없을 때만) avoidObstacles
+  const pts = useMemo(()=>{
+    const raw=routePipe(
+      sourceX,sourceY,sourcePosition||"right",
+      targetX,targetY,targetPosition||"left",
+      storedWp
+    );
+    return storedWp.length>0 ? raw : avoidObstacles(raw,obstacles);
+  },[sourceX,sourceY,sourcePosition,targetX,targetY,targetPosition,
+     storedWp,obstacles]);
+
   const path = buildElbowPath(pts);
   const segs = getSegments(pts);
 
-  // 전체 라인 길이 계산 → 화살표 크기 동적 조정
-  const totalLen = segs.reduce((s,g)=>s+g.len, 0);
-  // 짧은 선일수록 화살표 작게 (최소 4, 최대 8, strokeWidth 기준)
-  const arrowScale = totalLen < 40 ? 4 : totalLen < 80 ? 5 : 7;
+  const totalLen    = segs.reduce((s,g)=>s+g.len,0);
+  const arrowScale  = totalLen<40?4:totalLen<80?5:7;
+  const longest     = segs.reduce((a,b)=>b.len>a.len?b:a,segs[0]||{mx:0,my:0,len:0});
 
-  // 라벨 위치: 가장 긴 세그먼트 중앙
-  const longest = segs.reduce((a,b)=>b.len>a.len?b:a, segs[0]||{mx:0,my:0,len:0});
-
-  // SVG 좌표 변환
-  const toSVG = (svg, ev) => {
-    const pt = svg.createSVGPoint();
-    pt.x=ev.clientX; pt.y=ev.clientY;
+  const toSVG=(svg,ev)=>{
+    const pt=svg.createSVGPoint();
+    pt.x=ev.clientX;pt.y=ev.clientY;
     return pt.matrixTransform(svg.getScreenCTM().inverse());
   };
 
-  // ── 세그먼트 핸들 드래그 ───────────────────────────────
-  // 수평 세그먼트: y 이동 (↕)
-  // 수직 세그먼트: x 이동 (↔)
-  const onSegDrag = useCallback((e, segIdx) => {
+  // 세그먼트 드래그: 수평→y 이동, 수직→x 이동
+  const onSegDrag=useCallback((e,segIdx)=>{
     e.stopPropagation();
-    const svg = e.target.closest("svg"); if(!svg) return;
-    const seg      = segs[segIdx];
-    const origPos  = toSVG(svg, e);
-    // wps 초기화: 현재 pts에서 src·tgt 제외
-    const initWps  = storedWp.length>0
-      ? storedWp.map(p=>({...p}))
-      : pts.slice(1,-1).map(p=>({...p}));
+    const svg=e.target.closest("svg");if(!svg)return;
+    const seg=segs[segIdx];
+    const origPos=toSVG(svg,e);
+    const initWps=storedWp.length>0
+      ?storedWp.map(p=>({...p}))
+      :pts.slice(1,-1).map(p=>({...p}));
 
-    const onMove = mv => {
-      const cur = toSVG(svg, mv);
-      const nw  = initWps.map(p=>({...p}));
-      const wi1 = segIdx-1, wi2 = segIdx;
-      if (seg.isHoriz) {
-        const dy = cur.y - origPos.y;
-        if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], y:initWps[wi1].y+dy};
-        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], y:(initWps[wi2]?.y??cur.y)+dy};
+    const onMove=mv=>{
+      const cur=toSVG(svg,mv);
+      const nw=initWps.map(p=>({...p}));
+      const wi1=segIdx-1,wi2=segIdx;
+      if(seg.isHoriz){
+        const dy=cur.y-origPos.y;
+        if(wi1>=0&&wi1<nw.length) nw[wi1]={...nw[wi1],y:initWps[wi1].y+dy};
+        if(wi2>=0&&wi2<nw.length) nw[wi2]={...nw[wi2],y:(initWps[wi2]?.y??cur.y)+dy};
       } else {
-        const dx = cur.x - origPos.x;
-        if (wi1>=0 && wi1<nw.length) nw[wi1]={...nw[wi1], x:initWps[wi1].x+dx};
-        if (wi2>=0 && wi2<nw.length) nw[wi2]={...nw[wi2], x:(initWps[wi2]?.x??cur.x)+dx};
+        const dx=cur.x-origPos.x;
+        if(wi1>=0&&wi1<nw.length) nw[wi1]={...nw[wi1],x:initWps[wi1].x+dx};
+        if(wi2>=0&&wi2<nw.length) nw[wi2]={...nw[wi2],x:(initWps[wi2]?.x??cur.x)+dx};
       }
-      // 정규화: 거의 일직선인 꺾임 제거
-      const allPts  = normalizePath([{x:sourceX,y:sourceY},...nw,{x:targetX,y:targetY}]);
-      const cleanWp = allPts.slice(1,-1);
+      const allPts=normalizePath([{x:sourceX,y:sourceY},...nw,{x:targetX,y:targetY}]);
       window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
-        {detail:{id, waypoints:cleanWp}}));
+        {detail:{id,waypoints:allPts.slice(1,-1)}}));
     };
-    const onUp=()=>{
-      window.removeEventListener("mousemove",onMove);
-      window.removeEventListener("mouseup",onUp);
-    };
+    const onUp=()=>{window.removeEventListener("mousemove",onMove);window.removeEventListener("mouseup",onUp);};
     window.addEventListener("mousemove",onMove);
     window.addEventListener("mouseup",onUp);
-  },[id, segs, storedWp, pts, sourceX, sourceY, targetX, targetY]);
+  },[id,segs,storedWp,pts,sourceX,sourceY,targetX,targetY]);
 
   return (
     <g>
       <defs>
-        {/* 끝점 화살표 — 라인 길이에 비례한 크기 */}
         <marker id={mkId}
           markerWidth={arrowScale} markerHeight={arrowScale*0.6}
           refX={arrowScale-0.5} refY={arrowScale*0.3}
           orient="auto" markerUnits="strokeWidth">
-          <polygon
-            points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
+          <polygon points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
             fill={stroke} stroke="none"/>
         </marker>
-        {/* 시작점 화살표 (양방향) */}
-        {ls.bidir && (
+        {ls.bidir&&(
           <marker id={`${mkId}_start`}
             markerWidth={arrowScale} markerHeight={arrowScale*0.6}
             refX={0.5} refY={arrowScale*0.3}
             orient="auto-start-reverse" markerUnits="strokeWidth">
-            <polygon
-              points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
+            <polygon points={`0,0 ${arrowScale},${arrowScale*0.3} 0,${arrowScale*0.6}`}
               fill={stroke} stroke="none"/>
           </marker>
         )}
@@ -1854,30 +1757,26 @@ const PipeEdge = ({
         stroke={stroke} strokeWidth={sw}
         strokeDasharray={ls.dash==="none"?"":ls.dash}
         markerEnd={`url(#${mkId})`}
-        markerStart={ls.bidir ? `url(#${mkId}_start)` : undefined}
+        markerStart={ls.bidir?`url(#${mkId}_start)`:undefined}
         style={{pointerEvents:"none"}}/>
 
-      {/* 선택 시: 세그먼트 중앙 핸들 (파란 사각형) */}
-      {selected && segs.map((seg, i) => {
-        // 너무 짧은 세그먼트는 핸들 생략
-        if (seg.len < 20) return null;
-        // stub 세그먼트(첫·마지막)는 작게
-        const isStub = i===0||i===segs.length-1;
-        if (isStub) return null;
-        const cursor = seg.isHoriz ? "ns-resize" : "ew-resize";
-        return (
+      {/* 선택 시 세그먼트 핸들 — 중앙 파란 사각형 (stub 제외) */}
+      {selected&&segs.map((seg,i)=>{
+        if(seg.len<16) return null;
+        const isStub=i===0||i===segs.length-1;
+        if(isStub) return null;
+        const cursor=seg.isHoriz?"ns-resize":"ew-resize";
+        return(
           <rect key={i}
-            x={seg.mx-5} y={seg.my-5} width={10} height={10}
-            rx={1}
-            fill={selected?"#2563EB":"#3b82f6"}
-            stroke="white" strokeWidth={1.5}
-            style={{cursor, pointerEvents:"all"}}
+            x={seg.mx-5} y={seg.my-5} width={10} height={10} rx={1}
+            fill="#2563EB" stroke="white" strokeWidth={1.5}
+            style={{cursor,pointerEvents:"all"}}
             onMouseDown={e=>onSegDrag(e,i)}/>
         );
       })}
 
       {/* 라벨 + IC 배지 */}
-      {(showLabel||icNo) && longest.len > 30 && (
+      {(showLabel||icNo)&&longest.len>30&&(
         <EdgeLabelRenderer>
           <div style={{
             position:"absolute",
@@ -1885,24 +1784,19 @@ const PipeEdge = ({
             display:"flex",flexDirection:"column",alignItems:"center",gap:2,
             pointerEvents:"none",
           }}>
-            {showLabel && (
+            {showLabel&&(
               <div style={{
-                fontSize:10, fontWeight:isSpecial?700:500,
-                fontFamily:"monospace",
-                background:"rgba(255,255,255,0.95)",
-                padding:"1px 6px", borderRadius:4,
-                border:`1px solid ${baseColor}`,
-                color:baseColor,
-                whiteSpace:"nowrap",
-                boxShadow:"0 1px 3px rgba(0,0,0,0.1)",
+                fontSize:10,fontWeight:isSpecial?700:500,fontFamily:"monospace",
+                background:"rgba(255,255,255,0.95)",padding:"1px 6px",
+                borderRadius:4,border:`1px solid ${baseColor}`,color:baseColor,
+                whiteSpace:"nowrap",boxShadow:"0 1px 3px rgba(0,0,0,0.1)",
               }}>{showLabel}</div>
             )}
-            {icNo && (
+            {icNo&&(
               <div style={{
                 fontSize:9,fontWeight:700,
                 background:icStatus?icColor:"#64748B",
-                color:"#fff",padding:"0 5px",
-                borderRadius:3,whiteSpace:"nowrap",
+                color:"#fff",padding:"0 5px",borderRadius:3,whiteSpace:"nowrap",
               }}>{icNo}{icStatus?` · ${icStatus}`:""}</div>
             )}
           </div>
@@ -1911,6 +1805,13 @@ const PipeEdge = ({
     </g>
   );
 };
+
+// ── 경로 정규화 ───────────────────────────────────────────────
+// 두 가지 처리:
+//  1) 스냅: 거의 같은 x 또는 y 좌표(≤ SNAP_TOL)를 정확히 일치시킴
+//  2) 병합: 연속된 같은 방향 세그먼트의 중간 waypoint 제거
+const SNAP_TOL = 8; // px — 이 이내면 동일 좌표로 정렬
+
 
 // ─────────────────────────────────────────────────────────────
 // SMART GUIDE — 노드 드래그 시 정렬 가상선 + 자동 스냅
@@ -2135,7 +2036,6 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 </div>
                 {getSpecFields(d.equipType).map(({key,label,unit})=>(
                   <div key={key} style={{ marginBottom:5 }}>
-                    {/* 라벨: 항목명 + 단위 */}
                     <label style={{ ...L, marginBottom:1 }}>
                       {label}
                       {unit && (
@@ -2144,30 +2044,17 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                         </span>
                       )}
                     </label>
-                    {/* 입력란: 단위 suffix 별도 표시, placeholder는 빈 값 */}
-                    <div style={{ display:"flex",alignItems:"center",gap:4 }}>
-                      <input
-                        style={{ ...I, marginBottom:0, flex:1 }}
-                        value={
-                          // 이전 버전 잔재 키 정리: 숫자+단위 형태면 숫자만 추출하지 않고 그대로 표시
-                          // 단, 값 끝에 단위가 붙어있으면 제거 후 표시
-                          (() => {
-                            const v = d[key] || "";
-                            if (!unit || !v) return v;
-                            // "80 m³/h" → "80" 으로 정리 (단위가 이미 라벨에 있으므로)
-                            const stripped = v.replace(new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`), "").trim();
-                            return stripped;
-                          })()
-                        }
-                        onChange={e => upN(key, e.target.value)}
-                        placeholder=""
-                      />
-                      {unit && (
-                        <span style={{ fontSize:10,color:"#94a3b8",whiteSpace:"nowrap",flexShrink:0 }}>
-                          {unit}
-                        </span>
-                      )}
-                    </div>
+                    <input
+                      style={{ ...I, marginBottom:0 }}
+                      value={(() => {
+                        const v = d[key] || "";
+                        if (!unit || !v) return v;
+                        const stripped = v.replace(new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`), "").trim();
+                        return stripped;
+                      })()}
+                      onChange={e => upN(key, e.target.value)}
+                      placeholder=""
+                    />
                   </div>
                 ))}
 
