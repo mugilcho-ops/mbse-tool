@@ -1,6 +1,7 @@
 // ============================================================
-// MBSE Interface Master v8
-// 추가: Excel Export / Import (SheetJS)
+// MBSE Interface Master v10
+// EM System: Interface Type 분류 + ICD/TQ 관리 + Scope/Vendor + 9단계 IC Status
+// Excel 6 Sheets: IC / ICD / Equipment / Connection / Scope / Requirements
 // React + ReactFlow  |  package.json: "reactflow": "^11.11.4"
 // ============================================================
 
@@ -146,6 +147,54 @@ const exportToExcel = async (nodes, edges) => {
   const areaNodes = nodes.filter(n => n.type === "area");
   const icRows = [];
 
+  // ══════════════════════════════════════════════════════════
+  // v10.1 SHEET 0: Scope of Supply (담당자 배정표)
+  // Plant / Package / Equipment 계층별로
+  //  - POSCO 담당 (PM·운전·정비, 복수)
+  //  - Supplier 담당 (대표·PM·Mech·Piping·Process·EIC·Civil·Arch)
+  // ══════════════════════════════════════════════════════════
+  const sosRows = [];
+  // 담당자 객체 → 문자열 ("PM: 홍길동 / 운전: 김철수")
+  const staffToStr = (obj, roles) => {
+    if (!obj) return "";
+    return roles.filter(r=>obj[r]).map(r=>`${r}: ${obj[r]}`).join(" / ");
+  };
+  // sos 데이터 추출 헬퍼
+  const sosEntry = (n, level) => {
+    const d = n.data || {};
+    const sos = d.sos || {};   // {posco:{role:names}, supplier:{role:names}}
+    const row = {
+      "구분":      level,
+      "이름":      d.label || d.itemNo || "",
+      "Type":      d.areaType || d.equipType || n.type || "",
+      "Vendor":    d.vendorName || "",
+    };
+    // POSCO 담당 (역할별 컬럼)
+    SOS_POSCO_ROLES.forEach(r => {
+      row[`POSCO·${r}`] = sos.posco?.[r] || "";
+    });
+    // Supplier 담당 (역할별 컬럼)
+    SOS_SUPPLIER_ROLES.forEach(r => {
+      row[`Supplier·${r}`] = sos.supplier?.[r] || "";
+    });
+    row["Node ID"] = n.id;
+    return row;
+  };
+
+  // Plant → Package(System) → Equipment 순서로 정렬
+  const plantAreas   = areaNodes.filter(a => a.data?.areaType === "Plant");
+  const systemAreas  = areaNodes.filter(a => a.data?.areaType === "System");
+  const packageAreas = areaNodes.filter(a => a.data?.areaType === "Package");
+  const itemAreas    = areaNodes.filter(a => a.data?.areaType === "Item");
+  const equipNodes   = nodes.filter(n => n.type === "equipment");
+
+  plantAreas.forEach(a   => sosRows.push(sosEntry(a, "Plant")));
+  systemAreas.forEach(a  => sosRows.push(sosEntry(a, "System")));
+  packageAreas.forEach(a => sosRows.push(sosEntry(a, "Package")));
+  itemAreas.forEach(a    => sosRows.push(sosEntry(a, "Item")));
+  equipNodes.forEach(n   => sosRows.push(sosEntry(n, "Equipment")));
+
+
   // 각 Area별 경계 통과 엣지 수집
   areaNodes.forEach(area => {
     const ax = area.position.x, ay = area.position.y;
@@ -217,15 +266,20 @@ const exportToExcel = async (nodes, edges) => {
         "Line Text":        d.lineText  || "",
         "From 설비":        srcLabel,
         "To 설비":          tgtLabel,
-        "상태":             "OPEN",
+        "상태":             d.ic_status || "OPEN",
         "우선순위":         fluidSub === "" ? "Medium" : "High",
         "등록일":           new Date().toISOString().slice(0,10),
-        "목표 완료일":      "",
-        "실제 완료일":      "",
-        "담당자 (From)":    "",
-        "담당자 (To)":      "",
-        "비고":             "",
-        "ICD 번호":         `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+        "목표 완료일":      d.ic_due    || "",
+        "실제 완료일":      d.ic_closed || "",
+        "담당자 (From)":    d.ic_resp_from || "",
+        "담당자 (To)":      d.ic_resp_to   || "",
+        "비고":             d.ic_remark || "",
+        "IF Type":          d.ifType    || "",
+        "ICD 번호":         d.icd_no    || `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+        "ICD 상태":         d.icd_status|| "",
+        "TQ 번호":          d.tq_no     || "",
+        "TQ 상태":          d.tq_status || "",
+        "Open Items":       d.openItems || "",
         "Edge ID":          e.id,
       });
     });
@@ -270,16 +324,81 @@ const exportToExcel = async (nodes, edges) => {
       "Line Text":        d.lineText||"",
       "From 설비":        srcLabel,
       "To 설비":          tgtLabel,
-      "상태":             "OPEN",
+      "상태":             d.ic_status || "OPEN",
       "우선순위":         "Medium",
       "등록일":           new Date().toISOString().slice(0,10),
-      "목표 완료일":      "",
-      "실제 완료일":      "",
-      "담당자 (From)":    "",
-      "담당자 (To)":      "",
-      "비고":             "",
-      "ICD 번호":         `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+      "목표 완료일":      d.ic_due    || "",
+      "실제 완료일":      d.ic_closed || "",
+      "담당자 (From)":    d.ic_resp_from || "",
+      "담당자 (To)":      d.ic_resp_to   || "",
+      "비고":             d.ic_remark || "",
+      "IF Type":          d.ifType    || "",
+      "ICD 번호":         d.icd_no    || `ICD-${String(icRows.length+1).padStart(3,"0")}`,
+      "ICD 상태":         d.icd_status|| "",
+      "TQ 번호":          d.tq_no     || "",
+      "TQ 상태":          d.tq_status || "",
+      "Open Items":       d.openItems || "",
       "Edge ID":          e.id,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // v10 SHEET: ICD Register (ICD 번호 기준 집계)
+  // ══════════════════════════════════════════════════════════
+  const icdRows = [];
+  edges.forEach(e => {
+    const d = e.data || {};
+    if (!d.icd_no) return; // ICD 번호 있는 것만
+    const srcNode = nodes.find(n => n.id === e.source);
+    const tgtNode = nodes.find(n => n.id === e.target);
+    const srcArea = srcNode ? getAreaOf(srcNode, nodes) : null;
+    const tgtArea = tgtNode ? getAreaOf(tgtNode, nodes) : null;
+    icdRows.push({
+      "ICD 번호":      d.icd_no,
+      "ICD 상태":      d.icd_status || "",
+      "IF Type":       d.ifType || "",
+      "Sender (Package)":   srcArea?.data?.vendorName || srcArea?.data?.label || "",
+      "Receiver (Package)": tgtArea?.data?.vendorName || tgtArea?.data?.label || "",
+      "IC 상태":       d.ic_status || "",
+      "IFA Date":      d.icd_ifaDate || "",
+      "IFC Date":      d.icd_ifcDate || "",
+      "TQ 번호":       d.tq_no || "",
+      "TQ 상태":       d.tq_status || "",
+      "Open Items":    d.openItems || "",
+      "Edge ID":       e.id,
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════
+  // v10 SHEET: Scope Register (Area 노드 Scope/Vendor 정보)
+  // ══════════════════════════════════════════════════════════
+  const scopeRows = [];
+  nodes.filter(n => n.type === "area").forEach(n => {
+    const d = n.data || {};
+    if (!d.wbsCode && !d.vendorName && !d.scopeText) return; // 입력된 것만
+    // POSCO/Eng 담당자 합치기
+    const poscoStr = d.poscoStaff
+      ? Object.entries(d.poscoStaff).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join(" / ")
+      : "";
+    const engStr = d.engStaff
+      ? Object.entries(d.engStaff).filter(([,v])=>v).map(([k,v])=>`${k}: ${v}`).join(" / ")
+      : "";
+    scopeRows.push({
+      "WBS Code":       d.wbsCode || "",
+      "Area":           d.label || "",
+      "Type":           d.areaType || "",
+      "Team":           d.teamId || "",
+      "Discipline":     d.discipline || "",
+      "범위 기술":       d.scopeText || "",
+      "포함 범위":       d.inclusions || "",
+      "제외 범위":       d.exclusions || "",
+      "Vendor 회사":     d.vendorName || "",
+      "Vendor 국가":     d.vendorCountry || "",
+      "계약번호":        d.vendorContract || "",
+      "Interface Coordinator": d.vendorICA || "",
+      "POSCO 담당":      poscoStr,
+      "Engineering 담당": engStr,
+      "Node ID":        n.id,
     });
   });
 
@@ -403,7 +522,7 @@ const exportToExcel = async (nodes, edges) => {
     "관련 Package","인터페이스 설명","유체/매체","Size","Schedule",
     "Line No.","From 설비","To 설비","상태","우선순위",
     "등록일","목표 완료일","실제 완료일","담당자 (From)","담당자 (To)",
-    "비고","ICD 번호",
+    "비고","IF Type","ICD 번호","ICD 상태","TQ 번호","TQ 상태","Open Items","Edge ID",
   ];
 
   // 프로젝트 정보 행
@@ -470,15 +589,15 @@ const exportToExcel = async (nodes, edges) => {
   wsIC["!cols"] = [
     {wch:10},{wch:32},{wch:10},{wch:18},{wch:18},
     {wch:18},{wch:36},{wch:16},{wch:8},{wch:8},
-    {wch:12},{wch:16},{wch:16},{wch:12},{wch:10},
+    {wch:12},{wch:16},{wch:16},{wch:14},{wch:10},
     {wch:12},{wch:12},{wch:12},{wch:14},{wch:14},
-    {wch:24},{wch:10},
+    {wch:24},{wch:8},{wch:18},{wch:10},{wch:10},{wch:10},{wch:24},{wch:14},
   ];
 
   // ── SHEET 2: Equipment List ────────────────────────────────
   const eqHdrs = [
     "Item No.","설비명","설비 유형","소속 Area",
-    "재질","용량","설계 압력","설계 온도","연결 Interface 수","비고",
+    "재질","용량","설계 압력","설계 온도","연결 Interface 수","비고","Node ID",
   ];
   const eqAoa = [
     [Object.assign(XS.hdr("Equipment List"), {
@@ -509,14 +628,14 @@ const exportToExcel = async (nodes, edges) => {
   wsEq["!rows"] = [{hpt:28},{hpt:18},{hpt:22},...equipRows.map(()=>({hpt:22}))];
   wsEq["!cols"] = [
     {wch:12},{wch:22},{wch:20},{wch:22},
-    {wch:12},{wch:14},{wch:12},{wch:12},{wch:16},{wch:28},
+    {wch:12},{wch:14},{wch:12},{wch:12},{wch:16},{wch:28},{wch:14},
   ];
 
   // ── SHEET 3: Connection List ───────────────────────────────
   const cnHdrs = [
     "Line No.","Line Type","Fluid (Primary)","Fluid (Sub)",
     "Size","Schedule","Line Text",
-    "From (Item No.)","To (Item No.)","연결 IC No.","IC 상태",
+    "From (Item No.)","To (Item No.)","연결 IC No.","IC 상태","Edge ID",
   ];
   const cnAoa = [
     [Object.assign(XS.hdr("Connection List"), {
@@ -542,12 +661,12 @@ const exportToExcel = async (nodes, edges) => {
   wsCn["!cols"] = [
     {wch:12},{wch:12},{wch:14},{wch:10},
     {wch:8},{wch:8},{wch:16},
-    {wch:16},{wch:16},{wch:12},{wch:12},
+    {wch:16},{wch:16},{wch:12},{wch:12},{wch:14},
   ];
 
   // ── SHEET 4: Requirements ──────────────────────────────────
   const rqHdrs = [
-    "Item No.","소속 Area","Stakeholder","날짜","요구사항","담당자","검토결과",
+    "Item No.","소속 Area","Stakeholder","날짜","요구사항","담당자","검토결과","Node ID",
   ];
   const rqAoa = [
     [Object.assign(XS.hdr("Requirements"), {
@@ -568,16 +687,138 @@ const exportToExcel = async (nodes, edges) => {
   wsRq["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:rqHdrs.length-1} }];
   wsRq["!rows"] = [{hpt:28},{hpt:22},...reqRows.map(()=>({hpt:36}))];
   wsRq["!cols"] = [
-    {wch:14},{wch:22},{wch:16},{wch:12},{wch:42},{wch:14},{wch:32},
+    {wch:14},{wch:22},{wch:16},{wch:12},{wch:42},{wch:14},{wch:32},{wch:14},
   ];
 
+  // ── v10 SHEET: ICD Register ────────────────────────────────
+  const icdHdrs = [
+    "ICD 번호","ICD 상태","IF Type","Sender (Package)","Receiver (Package)",
+    "IC 상태","IFA Date","IFC Date","TQ 번호","TQ 상태","Open Items",
+  ];
+  const icdAoa = [
+    [Object.assign(XS.hdr("ICD Register — Interface Control Document"), {
+      s: XS.s({ bold:true, sz:12, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(icdHdrs.length-1).fill(null)],
+    icdHdrs.map(h => XS.shdr(h)),
+    ...icdRows.map((row,i) => icdHdrs.map((h) => {
+      const v = row[h] ?? "";
+      const wrap = h==="Open Items";
+      return XS.alt(v, i,
+        { h: h==="Open Items"?"left":"center", wrap,
+          bold: h==="ICD 번호", fc: h==="ICD 번호"?"1D4ED8":"000000" });
+    })),
+    ...(icdRows.length===0 ? [[XS.c("등록된 ICD가 없습니다. (Edge의 ICD No. 입력 시 자동 집계)",
+      {h:"center",fc:"94A3B8",border:false})]] : []),
+  ];
+  const wsICD = aoaToSheet(icdAoa);
+  wsICD["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:icdHdrs.length-1} }];
+  wsICD["!rows"] = [{hpt:28},{hpt:22},...icdRows.map(()=>({hpt:28}))];
+  wsICD["!cols"] = [
+    {wch:18},{wch:12},{wch:8},{wch:22},{wch:22},
+    {wch:14},{wch:12},{wch:12},{wch:12},{wch:10},{wch:30},
+  ];
+
+  // ── v10 SHEET: Scope Register ──────────────────────────────
+  const scHdrs = [
+    "WBS Code","Area","Type","Team","Discipline",
+    "범위 기술","포함 범위","제외 범위",
+    "Vendor 회사","Vendor 국가","계약번호","Interface Coordinator",
+    "POSCO 담당","Engineering 담당",
+  ];
+  const scAoa = [
+    [Object.assign(XS.hdr("Scope Register — Work Package & Vendor"), {
+      s: XS.s({ bold:true, sz:12, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(scHdrs.length-1).fill(null)],
+    scHdrs.map(h => XS.shdr(h)),
+    ...scopeRows.map((row,i) => scHdrs.map((h) => {
+      const v = row[h] ?? "";
+      const wrap = ["범위 기술","포함 범위","제외 범위","POSCO 담당","Engineering 담당"].includes(h);
+      return XS.alt(v, i,
+        { h: wrap?"left":"center", wrap,
+          bold: h==="WBS Code", fc: h==="WBS Code"?"1D4ED8":"000000" });
+    })),
+    ...(scopeRows.length===0 ? [[XS.c("등록된 Scope가 없습니다. (Area 노드의 Scope 탭 입력 시 자동 집계)",
+      {h:"center",fc:"94A3B8",border:false})]] : []),
+  ];
+  const wsSc = aoaToSheet(scAoa);
+  wsSc["!merges"] = [{ s:{r:0,c:0}, e:{r:0,c:scHdrs.length-1} }];
+  wsSc["!rows"] = [{hpt:28},{hpt:22},...scopeRows.map(()=>({hpt:40}))];
+  wsSc["!cols"] = [
+    {wch:16},{wch:18},{wch:10},{wch:8},{wch:12},
+    {wch:30},{wch:24},{wch:24},
+    {wch:16},{wch:12},{wch:14},{wch:18},
+    {wch:28},{wch:32},
+  ];
+
+  // ── v10.1 SHEET 0: Scope of Supply ─────────────────────────
+  const sosHdrs = [
+    "구분","이름","Type","Vendor",
+    ...SOS_POSCO_ROLES.map(r=>`POSCO·${r}`),
+    ...SOS_SUPPLIER_ROLES.map(r=>`Supplier·${r}`),
+    "Node ID",
+  ];
+  // 그룹 헤더 (POSCO / Supplier 구분)
+  const poscoStart = 4;
+  const poscoEnd   = poscoStart + SOS_POSCO_ROLES.length - 1;
+  const supStart   = poscoEnd + 1;
+  const supEnd     = supStart + SOS_SUPPLIER_ROLES.length - 1;
+  const sosAoa = [
+    // Row 0: 타이틀
+    [Object.assign(XS.hdr("Scope of Supply — 담당자 배정표"), {
+      s: XS.s({ bold:true, sz:13, bg:"1F3864", fc:"FFFFFF", bc:"1F3864" })
+    }), ...Array(sosHdrs.length-1).fill(null)],
+    // Row 1: 그룹 헤더 (기본정보 / POSCO / Supplier)
+    [
+      XS.c("기본 정보", {bold:true,bg:"D9E1F2",fc:"1F3864"}),
+      null,null,null,
+      XS.c("POSCO 담당", {bold:true,bg:"DDEBF7",fc:"1F3864"}),
+      ...Array(SOS_POSCO_ROLES.length-1).fill(null),
+      XS.c("Supplier 담당", {bold:true,bg:"FCE4D6",fc:"843C0C"}),
+      ...Array(SOS_SUPPLIER_ROLES.length-1).fill(null),
+      null,
+    ],
+    // Row 2: 컬럼 헤더
+    sosHdrs.map(h => XS.shdr(h.replace("POSCO·","").replace("Supplier·",""))),
+    // 데이터 행
+    ...sosRows.map((row,i) => sosHdrs.map((h,j) => {
+      const v = row[h] ?? "";
+      const isPosco = h.startsWith("POSCO·");
+      const isSup   = h.startsWith("Supplier·");
+      return XS.alt(v, i, {
+        h: j<1?"center":"left",
+        bold: h==="이름"||h==="구분",
+        fc: h==="구분" ? "1D4ED8"
+           : isPosco ? "1F4E79"
+           : isSup   ? "843C0C" : "000000",
+      });
+    })),
+    ...(sosRows.length===0 ? [[XS.c("노드가 없습니다.",{h:"center",fc:"94A3B8",border:false})]] : []),
+  ];
+  const wsSOS = aoaToSheet(sosAoa);
+  wsSOS["!merges"] = [
+    { s:{r:0,c:0}, e:{r:0,c:sosHdrs.length-1} },             // 타이틀
+    { s:{r:1,c:0}, e:{r:1,c:3} },                            // 기본정보
+    { s:{r:1,c:poscoStart}, e:{r:1,c:poscoEnd} },            // POSCO
+    { s:{r:1,c:supStart},   e:{r:1,c:supEnd} },              // Supplier
+  ];
+  wsSOS["!rows"] = [{hpt:30},{hpt:20},{hpt:22},...sosRows.map(()=>({hpt:22}))];
+  wsSOS["!cols"] = [
+    {wch:10},{wch:22},{wch:14},{wch:16},
+    ...SOS_POSCO_ROLES.map(()=>({wch:14})),
+    ...SOS_SUPPLIER_ROLES.map(()=>({wch:12})),
+    {wch:14},
+  ];
+
+  XLSX.utils.book_append_sheet(wb, wsSOS, "Scope of Supply");
   XLSX.utils.book_append_sheet(wb, wsIC,  "IC Register");
+  XLSX.utils.book_append_sheet(wb, wsICD, "ICD Register");
   XLSX.utils.book_append_sheet(wb, wsEq,  "Equipment List");
   XLSX.utils.book_append_sheet(wb, wsCn,  "Connection List");
+  XLSX.utils.book_append_sheet(wb, wsSc,  "Scope Register");
   XLSX.utils.book_append_sheet(wb, wsRq,  "Requirements");
 
   XLSX.writeFile(wb, `MBSE_ICRegister_${today}.xlsx`);
-  return { icCount: icRows.length, equipCount: equipRows.length, connCount: connRows.length };
+  return { icCount: icRows.length, equipCount: equipRows.length, connCount: connRows.length, icdCount: icdRows.length, scopeCount: scopeRows.length };
 };
 
 // ─────────────────────────────────────────────────────────────
@@ -641,6 +882,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
                 ic_resp_to:  row["담당자 (To)"]     != null ? String(row["담당자 (To)"]||"")    : e.data?.ic_resp_to,
                 ic_remark:   row["비고"]            != null ? String(row["비고"]||"")           : e.data?.ic_remark,
                 icd_no:      row["ICD 번호"]        != null ? String(row["ICD 번호"]||"")       : e.data?.icd_no,
+                ifType:      row["IF Type"]        != null ? String(row["IF Type"]||"")       : e.data?.ifType,
+                icd_status:  row["ICD 상태"]        != null ? String(row["ICD 상태"]||"")       : e.data?.icd_status,
+                tq_no:       row["TQ 번호"]         != null ? String(row["TQ 번호"]||"")        : e.data?.tq_no,
+                tq_status:   row["TQ 상태"]         != null ? String(row["TQ 상태"]||"")        : e.data?.tq_status,
+                openItems:   row["Open Items"]     != null ? String(row["Open Items"]||"")    : e.data?.openItems,
               }
             };
             log.push(`IC ${row["IC No."]} → Edge ${edgeId} 업데이트`);
@@ -724,6 +970,76 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           updatedNodes = updatedNodes.map(n => {
             if (!reqMap[n.id]) return n;
             return { ...n, data:{ ...n.data, requirements: reqMap[n.id] } };
+          });
+        }
+
+        // ── v10: Scope Register 시트 → Area Node 업데이트 ──
+        const wsSc = wb.Sheets["Scope Register"];
+        if (wsSc) {
+          const rows = readSheet(wsSc, "Node ID");
+          rows.forEach(row => {
+            const nodeId = String(row["Node ID"]||"").trim();
+            if (!nodeId) return;
+            const idx = updatedNodes.findIndex(n => n.id === nodeId);
+            if (idx === -1) return;
+            const n = updatedNodes[idx];
+            // POSCO/Eng 담당 문자열 → 객체 역파싱 ("PM: 홍길동 / 운전: 김철수")
+            const parseStaff = (str) => {
+              const obj = {};
+              String(str||"").split("/").forEach(part => {
+                const m = part.split(":");
+                if (m.length===2) obj[m[0].trim()] = m[1].trim();
+              });
+              return obj;
+            };
+            updatedNodes[idx] = {
+              ...n,
+              data: {
+                ...n.data,
+                wbsCode:     row["WBS Code"]   != null ? String(row["WBS Code"]||"")   : n.data?.wbsCode,
+                teamId:      row["Team"]       != null ? String(row["Team"]||"")       : n.data?.teamId,
+                discipline:  row["Discipline"] != null ? String(row["Discipline"]||"") : n.data?.discipline,
+                scopeText:   row["범위 기술"]   != null ? String(row["범위 기술"]||"")   : n.data?.scopeText,
+                inclusions:  row["포함 범위"]   != null ? String(row["포함 범위"]||"")   : n.data?.inclusions,
+                exclusions:  row["제외 범위"]   != null ? String(row["제외 범위"]||"")   : n.data?.exclusions,
+                vendorName:    row["Vendor 회사"]   != null ? String(row["Vendor 회사"]||"")   : n.data?.vendorName,
+                vendorCountry: row["Vendor 국가"]   != null ? String(row["Vendor 국가"]||"")   : n.data?.vendorCountry,
+                vendorContract:row["계약번호"]      != null ? String(row["계약번호"]||"")      : n.data?.vendorContract,
+                vendorICA:     row["Interface Coordinator"] != null ? String(row["Interface Coordinator"]||"") : n.data?.vendorICA,
+                poscoStaff:  row["POSCO 담당"] ? parseStaff(row["POSCO 담당"]) : n.data?.poscoStaff,
+                engStaff:    row["Engineering 담당"] ? parseStaff(row["Engineering 담당"]) : n.data?.engStaff,
+              }
+            };
+            log.push(`Scope ${row["WBS Code"]||nodeId} → Area ${nodeId} 업데이트`);
+          });
+        }
+
+        // ── v10.1: Scope of Supply 시트 → Node sos 업데이트 ──
+        const wsSOS = wb.Sheets["Scope of Supply"];
+        if (wsSOS) {
+          const rows = readSheet(wsSOS, "Node ID");
+          rows.forEach(row => {
+            const nodeId = String(row["Node ID"]||"").trim();
+            if (!nodeId) return;
+            const idx = updatedNodes.findIndex(n => n.id === nodeId);
+            if (idx === -1) return;
+            const n = updatedNodes[idx];
+            // 역할별 컬럼 → sos 객체 재구성
+            const posco = {};
+            SOS_POSCO_ROLES.forEach(r => {
+              const v = row[`POSCO·${r}`];
+              if (v != null && String(v).trim()) posco[r] = String(v).trim();
+            });
+            const supplier = {};
+            SOS_SUPPLIER_ROLES.forEach(r => {
+              const v = row[`Supplier·${r}`];
+              if (v != null && String(v).trim()) supplier[r] = String(v).trim();
+            });
+            updatedNodes[idx] = {
+              ...n,
+              data: { ...n.data, sos: { posco, supplier } }
+            };
+            log.push(`SoS ${row["이름"]||nodeId} → ${nodeId} 담당자 반영`);
           });
         }
 
@@ -832,6 +1148,45 @@ const LINE_STYLE = {
 };
 
 const INSTRUMENT_CATS = { Flow:[], Pressure:[], Temperature:[], Level:[] };
+
+// ─────────────────────────────────────────────────────────────
+// v10: Interface Type 분류 체계
+// ─────────────────────────────────────────────────────────────
+const IF_TYPES = {
+  P:    { label:"P · Physical",    color:"#2563eb", desc:"배관·덕트·컨베이어 등 물리적 연결",  risk:"중"     },
+  F:    { label:"F · Functional",  color:"#ea580c", desc:"제어신호·데이터·인터록",            risk:"높음"   },
+  Perf: { label:"Perf · Performance", color:"#dc2626", desc:"성능 보증 경계 (유량·온도·압력)", risk:"매우높음" },
+  T:    { label:"T · Temporal",    color:"#9333ea", desc:"운전 순서·시퀀스·타이밍",           risk:"높음"   },
+};
+
+// v10: IC Status 9단계 (외국사 분할발주 환경)
+const IC_STATUS_FLOW = {
+  "OPEN":          { color:"#ca8a04", next:"ICD 초안 작성 요청",   desc:"Interface 식별, 미협의" },
+  "TQ-ISSUED":     { color:"#0891b2", next:"응답 대기 (기한 관리)", desc:"Vendor에 질의 발송" },
+  "TQ-RESPONDED":  { color:"#0d9488", next:"기술 검토 및 수용/재질의", desc:"답변 수령" },
+  "IFA":           { color:"#2563eb", next:"양사 검토 중",         desc:"합의 요청 단계" },
+  "AGREED":        { color:"#7c3aed", next:"IFC 발행 대기",        desc:"양사 합의 완료" },
+  "IFC":           { color:"#4f46e5", next:"설계 반영 확인",       desc:"시공용 확정" },
+  "CLOSED":        { color:"#16a34a", next:"완결",                desc:"현장 검증 완료" },
+  "DISPUTED":      { color:"#db2777", next:"발주처 중재 요청",     desc:"이견 발생" },
+  "OVERDUE":       { color:"#dc2626", next:"에스컬레이션",         desc:"응답 기한 초과" },
+};
+const IC_STATUS_LIST = Object.keys(IC_STATUS_FLOW);
+
+// v10: ICD Status (Interface Control Document)
+const ICD_STATUS_LIST = ["IFD","IFA","IFC","Freeze","Superseded"];
+
+// v10: TQ Status
+const TQ_STATUS_LIST = ["발송됨","응답수령","추가질의","종결"];
+
+// v10: Vendor 담당 조직 / 국가
+const VENDOR_DISCIPLINES = ["PM","Civil","Architecture","Mechanical","Piping","EIC"];
+const POSCO_ORGS = ["PM","운전","정비"];
+
+// v10.1: Scope of Supply 담당자 역할 정의
+const SOS_POSCO_ROLES    = ["PM","운전","정비"];                                       // 복수 입력
+const SOS_SUPPLIER_ROLES = ["대표","PM","Mech.","Piping","Process","EIC","Civil","Arch"];
+
 const INSTR_TYPES     = ["Transmitter","Switch","Gauge"];
 const FLUID_PRIMARY   = ["Water","Slurry Water","Gas","Process Gas","Steam","Chemical"];
 const FLUID_SECONDARY = {
@@ -1240,6 +1595,22 @@ const AreaNode = memo(({ id, data, selected }) => {
               {data.areaType==="Item" ? `[Item] ` : ""}
               {data.label || <span style={{ opacity:0.4, fontSize:"0.7em" }}>(더블클릭 편집)</span>}
             </span>
+          )}
+          {/* v10: Vendor 회사명 배지 */}
+          {!editing && data.vendorName && (
+            <div style={{ display:"flex",alignItems:"center",gap:3,marginTop:3 }}>
+              <span style={{
+                fontSize:9,fontWeight:700,background:"#1e293b",color:"#fff",
+                padding:"0 6px",borderRadius:3,display:"inline-flex",alignItems:"center",gap:2,
+              }}>🏭 {data.vendorName}{data.vendorCountry?` (${data.vendorCountry})`:""}</span>
+              {data.teamId && (
+                <span style={{
+                  fontSize:9,fontWeight:700,
+                  background:data.teamId==="FBR"?"#2563eb":data.teamId==="ESF"?"#dc2626":"#64748b",
+                  color:"#fff",padding:"0 6px",borderRadius:3,
+                }}>{data.teamId}</span>
+              )}
+            </div>
           )}
         </div>
         {/* IN / OUT 토글 버튼 */}
@@ -1832,7 +2203,11 @@ const PipeEdge = ({
   const showLabel   = isSpecial?(data?.lineText||lt):pipingLabel;
   const icNo        = data?.ic_no||"";
   const icStatus    = data?.ic_status||"";
-  const icColor     = icStatusColor[icStatus]||"#64748B";
+  // v10: IC_STATUS_FLOW 색상 우선, 없으면 구버전 색상
+  const icColor     = (IC_STATUS_FLOW[icStatus]?.color) || icStatusColor[icStatus] || "#64748B";
+  const ifType      = data?.ifType||"";       // v10 Interface Type
+  const icdNo       = data?.icd_no||"";        // v10 ICD 번호
+  const icdStatus   = data?.icd_status||"";    // v10 ICD 상태
 
   // 장애물 수집 (Area 제외, source/target 제외)
   // bbox에 PADDING 추가, 실제 렌더된 노드 크기 사용
@@ -2005,8 +2380,8 @@ const PipeEdge = ({
         );
       })}
 
-      {/* 라벨 + IC 배지 */}
-      {(showLabel||icNo)&&longest.len>30&&(
+      {/* 라벨 + IC/IF Type/ICD 배지 */}
+      {(showLabel||icNo||ifType||icdNo)&&longest.len>30&&(
         <EdgeLabelRenderer>
           <div style={{
             position:"absolute",
@@ -2014,6 +2389,14 @@ const PipeEdge = ({
             display:"flex",flexDirection:"column",alignItems:"center",gap:2,
             pointerEvents:"none",
           }}>
+            {/* IF Type 배지 */}
+            {ifType&&IF_TYPES[ifType]&&(
+              <div style={{
+                fontSize:8,fontWeight:800,
+                background:IF_TYPES[ifType].color,color:"#fff",
+                padding:"0 5px",borderRadius:3,whiteSpace:"nowrap",letterSpacing:0.3,
+              }}>{ifType}</div>
+            )}
             {showLabel&&(
               <div style={{
                 fontSize:10,fontWeight:isSpecial?700:500,fontFamily:"monospace",
@@ -2021,6 +2404,14 @@ const PipeEdge = ({
                 borderRadius:4,border:`1px solid ${baseColor}`,color:baseColor,
                 whiteSpace:"nowrap",boxShadow:"0 1px 3px rgba(0,0,0,0.1)",
               }}>{showLabel}</div>
+            )}
+            {/* ICD 번호 배지 */}
+            {icdNo&&(
+              <div style={{
+                fontSize:8,fontWeight:700,fontFamily:"monospace",
+                background:"#1e293b",color:"#fff",
+                padding:"0 5px",borderRadius:3,whiteSpace:"nowrap",
+              }}>{icdNo}{icdStatus?` [${icdStatus}]`:""}</div>
             )}
             {icNo&&(
               <div style={{
@@ -2183,6 +2574,45 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
   const isNode=!!sel.position, d=sel.data||{};
   const upN=(k,v)=>onUpdateNode(sel.id,{...d,[k]:v});
   const upE=(k,v)=>onUpdateEdge(sel.id,{...d,[k]:v});
+
+  // v10.1: Scope of Supply 담당자 업데이트
+  const upSos = (group, role, v) => {
+    const sos = d.sos || { posco:{}, supplier:{} };
+    const updated = {
+      ...sos,
+      [group]: { ...(sos[group]||{}), [role]: v },
+    };
+    onUpdateNode(sel.id, { ...d, sos: updated });
+  };
+  // SoS 입력 폼 렌더 (Area/Equipment 공통)
+  const renderSoS = () => (
+    <>
+      <div style={{ fontWeight:700,fontSize:11,color:"#1f4e79",margin:"10px 0 6px",borderTop:"2px solid #ddebf7",paddingTop:7 }}>
+        👷 POSCO 담당 (복수 입력 가능)
+      </div>
+      {SOS_POSCO_ROLES.map(r=>(
+        <div key={r} style={{ marginBottom:5 }}>
+          <label style={L}>{r}</label>
+          <input style={{ ...I, marginBottom:0 }}
+            value={d.sos?.posco?.[r]||""}
+            onChange={e=>upSos("posco",r,e.target.value)}
+            placeholder="홍길동, 김철수"/>
+        </div>
+      ))}
+      <div style={{ fontWeight:700,fontSize:11,color:"#843c0c",margin:"10px 0 6px",borderTop:"2px solid #fce4d6",paddingTop:7 }}>
+        🏭 Supplier 담당
+      </div>
+      {SOS_SUPPLIER_ROLES.map(r=>(
+        <div key={r} style={{ marginBottom:5 }}>
+          <label style={L}>{r}</label>
+          <input style={{ ...I, marginBottom:0 }}
+            value={d.sos?.supplier?.[r]||""}
+            onChange={e=>upSos("supplier",r,e.target.value)}
+            placeholder={`${r} 담당자`}/>
+        </div>
+      ))}
+    </>
+  );
   const addReq=()=>{
     if(!reqText.trim()) return;
     const reqs=[...(d.requirements||[]),{
@@ -2212,6 +2642,7 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
       {isNode && (
         <div style={{ display:"flex",borderBottom:"1px solid #e2e8f0",flexShrink:0 }}>
           <TB name="spec" label="Spec"/><TB name="req" label="Req."/><TB name="iface" label="I/F"/>
+          {sel.type==="area"&&<TB name="scope" label="Scope"/>}
           {sel.type==="area"&&<TB name="io" label="IO"/>}
         </div>
       )}
@@ -2302,9 +2733,14 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     </div>
                   ))}
                 </div>
+
+                {/* ═══ Scope of Supply 담당자 (Excel 연동) ═══ */}
+                <div style={{ marginTop:10,padding:"6px 8px",background:"#f8fafc",borderRadius:6,fontSize:10,color:"#64748b",lineHeight:1.5 }}>
+                  📋 아래 담당자는 <b>Scope of Supply</b> 엑셀 시트에 출력되며, 엑셀에서 수정 후 Import하면 반영됩니다.
+                </div>
+                {renderSoS()}
               </>
             )}
-            {/* INSTRUMENT */}
             {isNode&&sel.type==="instrument"&&(
               <>
                 <label style={L}>Item No</label>
@@ -2422,8 +2858,71 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                   </>
                 )}
 
-                {/* IC Register 연동 정보 (IC Register Import 후 표시) */}
-                {(d.ic_no||d.ic_status) && (
+                {/* ═══ v10: Interface 관리 (Type/ICD/TQ) ═══ */}
+                <div style={{ fontWeight:700,fontSize:11,color:"#1d4ed8",margin:"10px 0 5px",borderTop:"2px solid #eff6ff",paddingTop:7 }}>
+                  🔗 Interface 관리
+                </div>
+
+                {/* Interface Type */}
+                <label style={L}>Interface Type</label>
+                <select style={S} value={d.ifType||""} onChange={e=>upE("ifType",e.target.value)}>
+                  <option value="">Select Type</option>
+                  {Object.entries(IF_TYPES).map(([k,v])=>(
+                    <option key={k} value={k}>{v.label}</option>
+                  ))}
+                </select>
+                {d.ifType&&IF_TYPES[d.ifType]&&(
+                  <div style={{ display:"flex",alignItems:"center",gap:6,marginBottom:7,padding:"4px 8px",background:"#f8fafc",borderRadius:4,borderLeft:`3px solid ${IF_TYPES[d.ifType].color}` }}>
+                    <span style={{ fontSize:10,color:"#475569" }}>{IF_TYPES[d.ifType].desc}</span>
+                    <span style={{ fontSize:9,marginLeft:"auto",fontWeight:700,color:IF_TYPES[d.ifType].color }}>위험 {IF_TYPES[d.ifType].risk}</span>
+                  </div>
+                )}
+
+                {/* IC Status (편집 가능) */}
+                <label style={L}>IC Status</label>
+                <select style={S} value={d.ic_status||""} onChange={e=>upE("ic_status",e.target.value)}>
+                  <option value="">Select Status</option>
+                  {IC_STATUS_LIST.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+                {d.ic_status&&IC_STATUS_FLOW[d.ic_status]&&(
+                  <div style={{ marginBottom:7,padding:"4px 8px",borderRadius:4,background:"#f8fafc",borderLeft:`3px solid ${IC_STATUS_FLOW[d.ic_status].color}` }}>
+                    <div style={{ fontSize:10,color:"#475569" }}>{IC_STATUS_FLOW[d.ic_status].desc}</div>
+                    <div style={{ fontSize:10,fontWeight:700,color:IC_STATUS_FLOW[d.ic_status].color,marginTop:1 }}>→ {IC_STATUS_FLOW[d.ic_status].next}</div>
+                  </div>
+                )}
+
+                {/* ICD 관리 */}
+                <label style={L}>ICD No.</label>
+                <input style={I} value={d.icd_no||""} onChange={e=>upE("icd_no",e.target.value)} placeholder="e.g. ICD-FBR-ESF-001"/>
+                <label style={L}>ICD Status</label>
+                <select style={S} value={d.icd_status||""} onChange={e=>upE("icd_status",e.target.value)}>
+                  <option value="">Select</option>
+                  {ICD_STATUS_LIST.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+                <div style={{ display:"flex",gap:5 }}>
+                  <div style={{ flex:1 }}>
+                    <label style={L}>IFA Date</label>
+                    <input type="date" style={I} value={d.icd_ifaDate||""} onChange={e=>upE("icd_ifaDate",e.target.value)}/>
+                  </div>
+                  <div style={{ flex:1 }}>
+                    <label style={L}>IFC Date</label>
+                    <input type="date" style={I} value={d.icd_ifcDate||""} onChange={e=>upE("icd_ifcDate",e.target.value)}/>
+                  </div>
+                </div>
+
+                {/* TQ 추적 */}
+                <label style={L}>TQ No.</label>
+                <input style={I} value={d.tq_no||""} onChange={e=>upE("tq_no",e.target.value)} placeholder="e.g. TQ-001"/>
+                <label style={L}>TQ Status</label>
+                <select style={S} value={d.tq_status||""} onChange={e=>upE("tq_status",e.target.value)}>
+                  <option value="">Select</option>
+                  {TQ_STATUS_LIST.map(s=><option key={s} value={s}>{s}</option>)}
+                </select>
+                <label style={L}>Open Items (미결사항)</label>
+                <textarea style={{ ...I,height:40,resize:"vertical" }} value={d.openItems||""} onChange={e=>upE("openItems",e.target.value)} placeholder="미결 Action Item..."/>
+
+                {/* IC Register 연동 정보 (Import 후 표시) */}
+                {(d.ic_no||d.ic_priority||d.ic_due) && (
                   <>
                     <div style={{ fontWeight:600,fontSize:11,color:"#334155",margin:"8px 0 5px",borderTop:"1px solid #f1f5f9",paddingTop:5 }}>IC Register 정보</div>
                     <div style={{ background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px 10px",fontSize:11 }}>
@@ -2514,6 +3013,88 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 {iface.lineText&&<div style={{ color:"#64748b",marginTop:2 }}>Label: {iface.lineText}</div>}
               </div>
             ))}
+          </>
+        )}
+
+        {/* ═══ v10: Scope 탭 (Area 전용) ═══ */}
+        {tab==="scope"&&isNode&&sel.type==="area"&&(
+          <>
+            <div style={{ fontWeight:700,fontSize:11,color:"#1d4ed8",marginBottom:6 }}>📐 Scope 정의</div>
+            <label style={L}>WBS Code</label>
+            <input style={I} value={d.wbsCode||""} onChange={e=>upN("wbsCode",e.target.value)} placeholder="e.g. FBR-UT-WT-001"/>
+
+            <div style={{ display:"flex",gap:5 }}>
+              <div style={{ flex:1 }}>
+                <label style={L}>Team</label>
+                <select style={S} value={d.teamId||""} onChange={e=>upN("teamId",e.target.value)}>
+                  <option value="">Select</option>
+                  <option value="FBR">FBR</option>
+                  <option value="ESF">ESF</option>
+                  <option value="Common">Common</option>
+                </select>
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={L}>Discipline</label>
+                <select style={S} value={d.discipline||""} onChange={e=>upN("discipline",e.target.value)}>
+                  <option value="">Select</option>
+                  {VENDOR_DISCIPLINES.map(x=><option key={x}>{x}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <label style={L}>범위 기술 (Scope)</label>
+            <textarea style={{ ...I,height:50,resize:"vertical" }} value={d.scopeText||""} onChange={e=>upN("scopeText",e.target.value)} placeholder="범위 기술..."/>
+            <label style={L}>포함 범위 (Inclusions)</label>
+            <textarea style={{ ...I,height:36,resize:"vertical" }} value={d.inclusions||""} onChange={e=>upN("inclusions",e.target.value)}/>
+            <label style={L}>제외 범위 (Exclusions)</label>
+            <textarea style={{ ...I,height:36,resize:"vertical" }} value={d.exclusions||""} onChange={e=>upN("exclusions",e.target.value)}/>
+
+            {/* ── Vendor 정보 ── */}
+            <div style={{ fontWeight:700,fontSize:11,color:"#1d4ed8",margin:"10px 0 6px",borderTop:"2px solid #eff6ff",paddingTop:7 }}>🏭 Vendor 정보</div>
+            <label style={L}>회사명</label>
+            <input style={I} value={d.vendorName||""} onChange={e=>upN("vendorName",e.target.value)} placeholder="e.g. Primetals"/>
+            <div style={{ display:"flex",gap:5 }}>
+              <div style={{ flex:1 }}>
+                <label style={L}>국가</label>
+                <input style={I} value={d.vendorCountry||""} onChange={e=>upN("vendorCountry",e.target.value)} placeholder="Austria"/>
+              </div>
+              <div style={{ flex:1 }}>
+                <label style={L}>계약번호</label>
+                <input style={I} value={d.vendorContract||""} onChange={e=>upN("vendorContract",e.target.value)}/>
+              </div>
+            </div>
+            <label style={L}>Interface Coordinator</label>
+            <input style={I} value={d.vendorICA||""} onChange={e=>upN("vendorICA",e.target.value)} placeholder="ICA 담당자"/>
+
+            {/* ── POSCO 담당 (복수) ── */}
+            <div style={{ fontWeight:700,fontSize:11,color:"#1d4ed8",margin:"10px 0 6px",borderTop:"2px solid #eff6ff",paddingTop:7 }}>👷 POSCO 담당</div>
+            {POSCO_ORGS.map(org=>(
+              <div key={org} style={{ marginBottom:6 }}>
+                <label style={L}>{org} 담당자 (쉼표로 복수 입력)</label>
+                <input style={I}
+                  value={(d.poscoStaff?.[org])||""}
+                  onChange={e=>upN("poscoStaff",{...(d.poscoStaff||{}),[org]:e.target.value})}
+                  placeholder="홍길동, 김철수"/>
+              </div>
+            ))}
+
+            {/* ── Engineering 담당 (복수) ── */}
+            <div style={{ fontWeight:700,fontSize:11,color:"#1d4ed8",margin:"10px 0 6px",borderTop:"2px solid #eff6ff",paddingTop:7 }}>🔧 Engineering 담당</div>
+            {VENDOR_DISCIPLINES.map(disc=>(
+              <div key={disc} style={{ marginBottom:6 }}>
+                <label style={L}>{disc} 담당자 (쉼표로 복수)</label>
+                <input style={I}
+                  value={(d.engStaff?.[disc])||""}
+                  onChange={e=>upN("engStaff",{...(d.engStaff||{}),[disc]:e.target.value})}
+                  placeholder="담당자 복수 입력"/>
+              </div>
+            ))}
+
+            {/* ═══ Scope of Supply 담당자 (Excel 연동) ═══ */}
+            <div style={{ marginTop:10,padding:"6px 8px",background:"#f8fafc",borderRadius:6,fontSize:10,color:"#64748b",lineHeight:1.5 }}>
+              📋 아래 담당자는 <b>Scope of Supply</b> 엑셀 시트에 출력되며, 엑셀에서 수정 후 Import하면 반영됩니다.
+            </div>
+            {renderSoS()}
           </>
         )}
 
