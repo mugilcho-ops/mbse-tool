@@ -951,13 +951,13 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           return null;
         };
 
-        // ── 시트 찾기 (이름 변형 허용) ────────────────────────
+        // ── 시트 찾기 (이름 변형 허용 + 컬럼명 fallback) ──────
+        // 시트명이 안 맞아도 헤더 컬럼 구성으로 시트 종류 자동 식별
         const findSheet = (...candidates) => {
           const names = Object.keys(wb.Sheets);
+          // 1) 이름 정확/유사 매칭
           for (const cand of candidates) {
-            // 정확 일치
             if (wb.Sheets[cand]) return wb.Sheets[cand];
-            // 대소문자/공백/언더스코어 무시 매칭
             const norm = s => String(s).toLowerCase().replace(/[\s_\-]/g, "");
             const target = norm(cand);
             const hit = names.find(n => norm(n) === target);
@@ -966,21 +966,51 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           return null;
         };
 
+        // ── 컬럼명 기반 시트 자동 식별 (fallback) ─────────────
+        // 시트가 1개로 합쳐졌거나 이름이 완전히 바뀐 경우 사용
+        // 시트 안의 헤더 컬럼명을 보고 어떤 종류 데이터인지 판별
+        const findSheetByColumns = (signatureCols) => {
+          for (const sheetName of Object.keys(wb.Sheets)) {
+            const ws = wb.Sheets[sheetName];
+            const raw = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, blankrows:false });
+            // 첫 15행 안에 signature 컬럼이 모두 들어있는 행을 찾음
+            for (let i = 0; i < Math.min(raw.length, 15); i++) {
+              const r = raw[i];
+              if (!Array.isArray(r)) continue;
+              const cellTexts = r.map(c => {
+                if (c == null) return "";
+                const v = typeof c === "object" && "v" in c ? c.v : c;
+                return String(v).trim();
+              });
+              // 모든 signature 컬럼이 이 행에 존재하면 매칭
+              const allFound = signatureCols.every(col => cellTexts.includes(col));
+              if (allFound) {
+                console.log(`  🔎 컬럼 매칭: 시트 "${sheetName}" 가 ${signatureCols.join(",")} 헤더 보유 → 사용`);
+                return ws;
+              }
+            }
+          }
+          return null;
+        };
+
         // ── 헬퍼: 스타일 적용 시트의 헤더 행 자동 감지 ───────
+        // keyCol은 단일 문자열 또는 후보 배열. 후보 중 하나라도 발견되면 그 행이 헤더.
         const readSheet = (ws, keyCol, sheetLabel) => {
           if (!ws) { console.log(`  ⚠ ${sheetLabel}: 시트 없음`); return []; }
+          const keyCandidates = Array.isArray(keyCol) ? keyCol : [keyCol];
           // 1) raw로 읽어서 헤더 행 위치 찾기 (defval=null로 빈 칸도 포함)
           const raw = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, blankrows:false });
           let headerRow = 0;
           for (let i = 0; i < Math.min(raw.length, 15); i++) {
             const r = raw[i];
             if (!r || !Array.isArray(r)) continue;
-            // 키 컬럼이 있는지 (셀 값이 객체일 가능성도 처리)
-            const found = r.some(c => {
-              if (c == null) return false;
+            const cellTexts = r.map(c => {
+              if (c == null) return "";
               const v = typeof c === "object" && "v" in c ? c.v : c;
-              return String(v).trim() === keyCol;
+              return String(v).trim();
             });
+            // 후보 중 하나라도 이 행에 있으면 헤더로 판정
+            const found = keyCandidates.some(k => cellTexts.includes(k));
             if (found) { headerRow = i; break; }
           }
           // 2) range로 객체 배열 추출 (defval:""로 빈 칸도 키 보장)
@@ -995,7 +1025,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         };
 
         // ── IC Register 시트 → Edge 업데이트 ─────────────
-        const wsIC = findSheet("IC Register","ICRegister","IC_Register");
+        const wsIC = findSheet("IC Register","ICRegister","IC_Register")
+                  || findSheetByColumns(["IC No.","상태","Edge ID"]);
         if (wsIC) {
           const rows = readSheet(wsIC, "Edge ID", "IC Register");
           let matched = 0, unmatched = 0;
@@ -1034,7 +1065,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         }
 
         // ── Equipment List 시트 → Node 업데이트 ──────────
-        const wsEq = findSheet("Equipment List","EquipmentList","Equipment");
+        const wsEq = findSheet("Equipment List","EquipmentList","Equipment")
+                  || findSheetByColumns(["Item No.","설비명","설비 유형","Node ID"]);
         if (wsEq) {
           const rows = readSheet(wsEq, "Node ID", "Equipment List");
           let matched = 0, unmatched = 0;
@@ -1064,7 +1096,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         }
 
         // ── Connection List 시트 → Edge 업데이트 ─────────
-        const wsConn = findSheet("Connection List","ConnectionList","Connection");
+        const wsConn = findSheet("Connection List","ConnectionList","Connection")
+                    || findSheetByColumns(["Line Type","Fluid (Primary)","Edge ID"]);
         if (wsConn) {
           const rows = readSheet(wsConn, "Edge ID", "Connection List");
           let matched = 0, unmatched = 0;
@@ -1098,9 +1131,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
 
         // ── Requirements 시트 → Node.requirements 업데이트 ──
         console.group("%c📝 Requirements 시트 처리", "color:#15803d;font-weight:bold");
-        const wsR = findSheet("Requirements","Requirement");
+        const wsR = findSheet("Requirements","Requirement")
+                 || findSheetByColumns(["요구사항","Stakeholder","담당자"])
+                 || findSheetByColumns(["요구사항","Stakeholder"]);
         if (wsR) {
-          const rows = readSheet(wsR, "Node ID", "Requirements");
+          const rows = readSheet(wsR, ["Node ID","Item No.","요구사항","Stakeholder"], "Requirements");
           const reqMap = {};
           let matched = 0, unmatched = 0;
           const unmatchedDetails = [];
@@ -1159,7 +1194,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         console.groupEnd();
 
         // ── Scope Register 시트 → Area Node 업데이트 ──
-        const wsSc = findSheet("Scope Register","ScopeRegister","Scope");
+        const wsSc = findSheet("Scope Register","ScopeRegister","Scope")
+                  || findSheetByColumns(["WBS Code","Vendor 회사","Node ID"]);
         if (wsSc) {
           const rows = readSheet(wsSc, "Node ID", "Scope Register");
           let matched = 0, unmatched = 0;
@@ -1201,7 +1237,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         }
 
         // ── Scope of Supply 시트 → Node sos 업데이트 ──
-        const wsSOS = findSheet("Scope of Supply","ScopeOfSupply","SoS");
+        const wsSOS = findSheet("Scope of Supply","ScopeOfSupply","SoS")
+                   || findSheetByColumns(["POSCO·PM","Supplier·대표","Node ID"]);
         if (wsSOS) {
           const rows = readSheet(wsSOS, "Node ID", "Scope of Supply");
           let matched = 0, unmatched = 0;
