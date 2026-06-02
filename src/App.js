@@ -843,12 +843,29 @@ const exportToExcel = async (nodes, edges) => {
 // Requirements 시트: 요구사항 병합
 // ─────────────────────────────────────────────────────────────
 const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
+  // ═══════════════════════════════════════════════════════════
+  // 진단 모드: 콘솔에 상세 로그를 출력합니다.
+  // ═══════════════════════════════════════════════════════════
+  console.group("%c[MBSE Import] 시작", "color:#1d4ed8;font-weight:bold;font-size:13px");
+  console.log("📁 파일:", file.name, `(${(file.size/1024).toFixed(1)} KB)`);
+  console.log("📊 현재 노드 수:", nodes.length, "/ 엣지 수:", edges.length);
+
+  // 현재 노드/엣지의 ID 샘플
+  console.log("🔍 현재 노드 ID 샘플 (앞 5개):",
+    nodes.slice(0,5).map(n => ({id:n.id, type:n.type, label:n.data?.label||n.data?.itemNo||""})));
+  console.log("🔍 현재 엣지 ID 샘플 (앞 5개):",
+    edges.slice(0,5).map(e => ({id:e.id, src:e.source, tgt:e.target, ic:e.data?.ic_no||""})));
+
   const XLSX = await loadXLSX();
+  console.log("✅ XLSX 라이브러리 로드 완료");
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = ev => {
       try {
         const wb = XLSX.read(ev.target.result, { type:"array", cellStyles:false, cellFormula:false });
+        console.log("📑 워크북에서 발견된 시트:", Object.keys(wb.Sheets));
+
         let updatedNodes = nodes.map(n => ({...n, data:{...(n.data||{})}}));
         let updatedEdges = edges.map(e => ({...e, data:{...(e.data||{})}}));
         const log = [];
@@ -950,8 +967,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         };
 
         // ── 헬퍼: 스타일 적용 시트의 헤더 행 자동 감지 ───────
-        const readSheet = (ws, keyCol) => {
-          if (!ws) return [];
+        const readSheet = (ws, keyCol, sheetLabel) => {
+          if (!ws) { console.log(`  ⚠ ${sheetLabel}: 시트 없음`); return []; }
           // 1) raw로 읽어서 헤더 행 위치 찾기 (defval=null로 빈 칸도 포함)
           const raw = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, blankrows:false });
           let headerRow = 0;
@@ -967,13 +984,20 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             if (found) { headerRow = i; break; }
           }
           // 2) range로 객체 배열 추출 (defval:""로 빈 칸도 키 보장)
-          return XLSX.utils.sheet_to_json(ws, { range: headerRow, defval: "" });
+          const rows = XLSX.utils.sheet_to_json(ws, { range: headerRow, defval: "" });
+          // 진단 로그
+          console.log(`  📋 ${sheetLabel}: headerRow=${headerRow}, ${rows.length}행 발견`);
+          if (rows.length > 0) {
+            console.log(`     컬럼:`, Object.keys(rows[0]));
+            console.log(`     첫 행:`, rows[0]);
+          }
+          return rows;
         };
 
         // ── IC Register 시트 → Edge 업데이트 ─────────────
         const wsIC = findSheet("IC Register","ICRegister","IC_Register");
         if (wsIC) {
-          const rows = readSheet(wsIC, "Edge ID");
+          const rows = readSheet(wsIC, "Edge ID", "IC Register");
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const edgeId = pick(row, "Edge ID", "").trim();
@@ -1012,7 +1036,7 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Equipment List 시트 → Node 업데이트 ──────────
         const wsEq = findSheet("Equipment List","EquipmentList","Equipment");
         if (wsEq) {
-          const rows = readSheet(wsEq, "Node ID");
+          const rows = readSheet(wsEq, "Node ID", "Equipment List");
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const idRaw  = pick(row, "Node ID", "");
@@ -1042,7 +1066,7 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Connection List 시트 → Edge 업데이트 ─────────
         const wsConn = findSheet("Connection List","ConnectionList","Connection");
         if (wsConn) {
-          const rows = readSheet(wsConn, "Edge ID");
+          const rows = readSheet(wsConn, "Edge ID", "Connection List");
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const idRaw = pick(row, "Edge ID", "");
@@ -1073,42 +1097,71 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         }
 
         // ── Requirements 시트 → Node.requirements 업데이트 ──
+        console.group("%c📝 Requirements 시트 처리", "color:#15803d;font-weight:bold");
         const wsR = findSheet("Requirements","Requirement");
         if (wsR) {
-          const rows = readSheet(wsR, "Node ID");
+          const rows = readSheet(wsR, "Node ID", "Requirements");
           const reqMap = {};
           let matched = 0, unmatched = 0;
-          rows.forEach(r => {
+          const unmatchedDetails = [];
+          rows.forEach((r, rowIdx) => {
             const idRaw    = pick(r, "Node ID", "");
             const itemNo   = pick(r, "Item No.", "");
             const areaLbl  = pick(r, "소속 Area", "");
             const reqText  = pick(r, "요구사항", "");
-            if (!reqText) return; // 요구사항 없는 행은 무시
+            const assignee = pick(r, "담당자", "");
+            const review   = pick(r, "검토결과", "");
+
+            if (!reqText) {
+              console.log(`  [행 ${rowIdx+1}] 요구사항 비어있음 → 스킵`);
+              return;
+            }
+
             const node = findNodeByIdLoose(idRaw, itemNo, areaLbl);
-            if (!node) { unmatched++; return; }
+            if (!node) {
+              unmatched++;
+              unmatchedDetails.push({행:rowIdx+1, "Node ID":idRaw, "Item No.":itemNo, "소속 Area":areaLbl, 요구사항:reqText.slice(0,30)});
+              return;
+            }
+
+            console.log(`  [행 ${rowIdx+1}] ✅ Node ID="${idRaw}" → 매칭된 노드: ${node.id} (${node.data?.label||node.data?.itemNo||""})`);
+            console.log(`            담당자="${assignee}", 검토결과="${review}"`);
+
             if (!reqMap[node.id]) reqMap[node.id] = [];
             reqMap[node.id].push({
               id:   Date.now() + Math.random(),
               text: reqText,
               who:  pick(r, "Stakeholder", ""),
               date: pick(r, "날짜", ""),
-              assignee: pick(r, "담당자", ""),
-              review:   pick(r, "검토결과", ""),
+              assignee: assignee,
+              review:   review,
             });
             matched++;
           });
+
+          if (unmatchedDetails.length > 0) {
+            console.group("❌ 미매칭 행 상세:");
+            console.table(unmatchedDetails);
+            console.groupEnd();
+          }
+
           updatedNodes = updatedNodes.map(n => {
             if (!reqMap[n.id]) return n;
             return { ...n, data:{ ...n.data, requirements: reqMap[n.id] } };
           });
+
+          console.log(`  📊 결과: ${matched}건 매칭, ${unmatched}건 미매칭`);
           if (matched > 0) log.push(`Requirements: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
           else if (unmatched > 0) log.push(`Requirements: ${unmatched}건 모두 미매칭 (Node ID 확인 필요)`);
+        } else {
+          console.log("  ⚠ Requirements 시트가 없습니다");
         }
+        console.groupEnd();
 
         // ── Scope Register 시트 → Area Node 업데이트 ──
         const wsSc = findSheet("Scope Register","ScopeRegister","Scope");
         if (wsSc) {
-          const rows = readSheet(wsSc, "Node ID");
+          const rows = readSheet(wsSc, "Node ID", "Scope Register");
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const idRaw = pick(row, "Node ID", "");
@@ -1150,7 +1203,7 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         // ── Scope of Supply 시트 → Node sos 업데이트 ──
         const wsSOS = findSheet("Scope of Supply","ScopeOfSupply","SoS");
         if (wsSOS) {
-          const rows = readSheet(wsSOS, "Node ID");
+          const rows = readSheet(wsSOS, "Node ID", "Scope of Supply");
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const idRaw = pick(row, "Node ID", "");
@@ -1179,19 +1232,48 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         }
 
         // 강제 새 배열 (React 변경 감지 보장) + zIndex 정규화
-        setNodes(normalizeAreaZIndex([...updatedNodes]));
-        setEdges([...updatedEdges]);
+        const finalNodes = normalizeAreaZIndex([...updatedNodes]);
+        const finalEdges = [...updatedEdges];
+
+        console.group("%c💾 최종 적용 직전 상태 확인", "color:#7c3aed;font-weight:bold");
+        console.log(`업데이트된 노드 수: ${finalNodes.length}, 엣지 수: ${finalEdges.length}`);
+        // 요구사항이 들어간 노드 샘플
+        const nodesWithReq = finalNodes.filter(n => (n.data?.requirements||[]).length > 0);
+        console.log(`Requirements 보유 노드: ${nodesWithReq.length}개`);
+        if (nodesWithReq.length > 0) {
+          const sample = nodesWithReq[0];
+          console.log(`  샘플 노드 [${sample.id}] 요구사항:`,
+            sample.data.requirements.map(r => ({
+              text: r.text?.slice(0,40),
+              assignee: r.assignee,
+              review: r.review?.slice(0,40),
+            })));
+        }
+        console.groupEnd();
+
+        setNodes(finalNodes);
+        setEdges(finalEdges);
+
         const msg = log.length > 0
           ? `Import 완료 — ${log.join(", ")}`
           : "Import 처리됨 (반영된 변경 없음)";
-        // 콘솔에 상세 로그 출력 (디버깅용)
-        console.log("[MBSE Import]", log);
+
+        console.log("%c[MBSE Import] 결과 요약", "color:#1d4ed8;font-weight:bold");
+        console.log(msg);
+        console.log("📋 시트별 로그:", log);
+        console.groupEnd(); // 메인 그룹 닫기
         resolve({ log, msg });
       } catch(err) {
+        console.error("❌ [MBSE Import] 오류:", err);
+        console.groupEnd();
         reject(err);
       }
     };
-    reader.onerror = reject;
+    reader.onerror = (e) => {
+      console.error("❌ [MBSE Import] 파일 읽기 오류:", e);
+      console.groupEnd();
+      reject(e);
+    };
     reader.readAsArrayBuffer(file);
   });
 };
@@ -3797,6 +3879,9 @@ const CanvasInner = () => {
     autoSaveTimer.current = setTimeout(()=>{
       try {
         localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history }));
+        // 진단: requirements 보유 노드 카운트 (import 직후 변경이 사라지는지 확인용)
+        const reqCount = nodes.reduce((sum,n)=>sum+((n.data?.requirements||[]).length),0);
+        console.log(`[AutoSave] 노드 ${nodes.length}, 엣지 ${edges.length}, Requirements 총 ${reqCount}건 저장됨`);
         setSaveMsg("💾 자동저장");
         setTimeout(()=>setSaveMsg(""),1200);
       } catch(err){ console.warn("자동저장 실패",err); }
