@@ -495,6 +495,8 @@ const exportToExcel = async (nodes, edges) => {
   });
 
   // ── 공통: aoa → ws 변환 헬퍼 ──────────────────────────────
+  // ID 컬럼처럼 긴 문자열은 Excel이 자동으로 숫자 변환할 수 있으므로
+  // 셀 객체에 t:"s" 를 명시하면 안전하게 텍스트로 저장됨
   const aoaToSheet = (aoa) => {
     const ws = {};
     let maxC = 0;
@@ -504,9 +506,22 @@ const exportToExcel = async (nodes, edges) => {
         if (cell == null) return;
         const ref = XLSX.utils.encode_cell({r:R, c:C});
         if (typeof cell === "object" && "v" in cell) {
-          ws[ref] = cell;
+          // 셀 값이 _ 가 포함된 문자열(=ID 가능성)이면 강제 텍스트
+          const v = cell.v;
+          if (typeof v === "string" && /^[a-zA-Z]+_\d+/.test(v)) {
+            ws[ref] = { ...cell, t: "s", v: String(v) };
+          } else if (typeof v === "string") {
+            ws[ref] = { ...cell, t: "s" };
+          } else {
+            ws[ref] = cell;
+          }
         } else {
-          ws[ref] = { v: cell, s: XS.s({ h:"left" }) };
+          // 원시값 셀: 문자열은 텍스트로
+          if (typeof cell === "string") {
+            ws[ref] = { v: cell, t: "s", s: XS.s({ h:"left" }) };
+          } else {
+            ws[ref] = { v: cell, s: XS.s({ h:"left" }) };
+          }
         }
       });
     });
@@ -863,6 +878,62 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           return String(raw);
         };
 
+        // ── 유연한 ID 매칭 (Excel이 긴 ID prefix를 잘라먹는 경우 대응) ──
+        // 예) "area_1777534685748_10" → Excel "777534685748_10"
+        //     "eq_1777537399751_2"   → Excel "777537399751_2"
+        const findNodeByIdLoose = (idRaw, fallbackItemNo, fallbackLabel) => {
+          const idStr = String(idRaw||"").trim();
+          // 1) 정확 매칭
+          if (idStr) {
+            let n = updatedNodes.find(x => x.id === idStr);
+            if (n) return n;
+            // 2) suffix 매칭 (양방향)
+            n = updatedNodes.find(x => x.id.endsWith(idStr) || idStr.endsWith(x.id));
+            if (n) return n;
+            // 3) 마지막 "_숫자_숫자" 패턴 추출 후 매칭
+            const tail = idStr.match(/(\d+_\d+)$/)?.[1];
+            if (tail) {
+              n = updatedNodes.find(x => x.id.endsWith(tail));
+              if (n) return n;
+            }
+          }
+          // 4) Item No. fallback
+          const itm = String(fallbackItemNo||"").trim();
+          if (itm) {
+            const n = updatedNodes.find(x => x.data?.itemNo === itm);
+            if (n) return n;
+          }
+          // 5) Label fallback (Area)
+          const lbl = String(fallbackLabel||"").trim();
+          if (lbl) {
+            const n = updatedNodes.find(x => x.type==="area" && x.data?.label === lbl);
+            if (n) return n;
+          }
+          return null;
+        };
+
+        const findEdgeByIdLoose = (idRaw, fallbackICNo) => {
+          const idStr = String(idRaw||"").trim();
+          if (idStr) {
+            let e = updatedEdges.find(x => x.id === idStr);
+            if (e) return e;
+            e = updatedEdges.find(x => x.id.endsWith(idStr) || idStr.endsWith(x.id));
+            if (e) return e;
+            const tail = idStr.match(/(\d+_\d+)$/)?.[1];
+            if (tail) {
+              e = updatedEdges.find(x => x.id.endsWith(tail));
+              if (e) return e;
+            }
+          }
+          // IC No. fallback
+          const icNo = String(fallbackICNo||"").trim();
+          if (icNo) {
+            const e = updatedEdges.find(x => x.data?.ic_no === icNo);
+            if (e) return e;
+          }
+          return null;
+        };
+
         // ── 시트 찾기 (이름 변형 허용) ────────────────────────
         const findSheet = (...candidates) => {
           const names = Object.keys(wb.Sheets);
@@ -903,16 +974,14 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         const wsIC = findSheet("IC Register","ICRegister","IC_Register");
         if (wsIC) {
           const rows = readSheet(wsIC, "Edge ID");
+          let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const edgeId = pick(row, "Edge ID", "").trim();
-            if (!edgeId) return;
-            const idx = updatedEdges.findIndex(e => e.id === edgeId);
-            if (idx === -1) return;
+            const icNo = pick(row, "IC No.", "");
+            const edge = findEdgeByIdLoose(edgeId, icNo);
+            if (!edge) { if (edgeId||icNo) unmatched++; return; }
+            const idx = updatedEdges.findIndex(e => e.id === edge.id);
             const e = updatedEdges[idx];
-            // 셀이 시트에 있으면 새 값으로 덮어쓰기 (빈 문자열 포함)
-            const setIf = (key, target) => {
-              if (hasVal(row, key)) target[target.k] = pick(row, key, "");
-            };
             const newData = { ...e.data };
             const apply = (key, dataKey) => {
               if (key in row) newData[dataKey] = pick(row, key, "");
@@ -935,19 +1004,23 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             apply("TQ 상태",         "tq_status");
             apply("Open Items",      "openItems");
             updatedEdges[idx] = { ...e, data: newData };
-            log.push(`IC ${pick(row,"IC No.","")} → Edge ${edgeId} 반영`);
+            matched++;
           });
+          if (matched) log.push(`IC Register: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
         // ── Equipment List 시트 → Node 업데이트 ──────────
         const wsEq = findSheet("Equipment List","EquipmentList","Equipment");
         if (wsEq) {
           const rows = readSheet(wsEq, "Node ID");
+          let matched = 0, unmatched = 0;
           rows.forEach(row => {
-            const nodeId = pick(row, "Node ID", "").trim();
-            if (!nodeId) return;
-            const idx = updatedNodes.findIndex(n => n.id === nodeId);
-            if (idx === -1) return;
+            const idRaw  = pick(row, "Node ID", "");
+            const itemNo = pick(row, "Item No.", "");
+            const areaLbl= pick(row, "소속 Area", "");
+            const node = findNodeByIdLoose(idRaw, itemNo, areaLbl);
+            if (!node) { if (idRaw||itemNo) unmatched++; return; }
+            const idx = updatedNodes.findIndex(n => n.id === node.id);
             const n = updatedNodes[idx];
             const newData = { ...n.data };
             const apply = (key, dataKey) => {
@@ -961,19 +1034,22 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             apply("설계 온도",   "designT");
             apply("비고",        "summary");
             updatedNodes[idx] = { ...n, data: newData };
-            log.push(`Equipment ${pick(row,"Item No.","")} → Node ${nodeId} 반영`);
+            matched++;
           });
+          if (matched) log.push(`Equipment List: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
         // ── Connection List 시트 → Edge 업데이트 ─────────
         const wsConn = findSheet("Connection List","ConnectionList","Connection");
         if (wsConn) {
           const rows = readSheet(wsConn, "Edge ID");
+          let matched = 0, unmatched = 0;
           rows.forEach(row => {
-            const edgeId = pick(row, "Edge ID", "").trim();
-            if (!edgeId) return;
-            const idx = updatedEdges.findIndex(e => e.id === edgeId);
-            if (idx === -1) return;
+            const idRaw = pick(row, "Edge ID", "");
+            const icNo  = pick(row, "연결 IC No.", "");
+            const edge = findEdgeByIdLoose(idRaw, icNo);
+            if (!edge) { if (idRaw) unmatched++; return; }
+            const idx = updatedEdges.findIndex(e => e.id === edge.id);
             const e = updatedEdges[idx];
             const newData = { ...e.data };
             const apply = (key, dataKey) => {
@@ -985,15 +1061,15 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             apply("Fluid (Sub)",      "fluidSub");
             apply("Schedule",         "spec");
             apply("Line Text",        "lineText");
-            // Size는 "100A" 형태 → sizeNum으로 분리
             if ("Size" in row) {
               const sz = pick(row, "Size", "");
               const m = sz.match(/^(\d+)A?$/);
               if (m) newData.sizeNum = m[1]; else newData.size = sz;
             }
             updatedEdges[idx] = { ...e, data: newData };
-            log.push(`Connection → Edge ${edgeId} 반영`);
+            matched++;
           });
+          if (matched) log.push(`Connection List: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
         // ── Requirements 시트 → Node.requirements 업데이트 ──
@@ -1001,34 +1077,45 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         if (wsR) {
           const rows = readSheet(wsR, "Node ID");
           const reqMap = {};
+          let matched = 0, unmatched = 0;
           rows.forEach(r => {
-            const nodeId = pick(r, "Node ID", "").trim();
-            if (!nodeId) return;
-            if (!reqMap[nodeId]) reqMap[nodeId] = [];
-            reqMap[nodeId].push({
+            const idRaw    = pick(r, "Node ID", "");
+            const itemNo   = pick(r, "Item No.", "");
+            const areaLbl  = pick(r, "소속 Area", "");
+            const reqText  = pick(r, "요구사항", "");
+            if (!reqText) return; // 요구사항 없는 행은 무시
+            const node = findNodeByIdLoose(idRaw, itemNo, areaLbl);
+            if (!node) { unmatched++; return; }
+            if (!reqMap[node.id]) reqMap[node.id] = [];
+            reqMap[node.id].push({
               id:   Date.now() + Math.random(),
-              text: pick(r, "요구사항", ""),
+              text: reqText,
               who:  pick(r, "Stakeholder", ""),
               date: pick(r, "날짜", ""),
               assignee: pick(r, "담당자", ""),
               review:   pick(r, "검토결과", ""),
             });
+            matched++;
           });
           updatedNodes = updatedNodes.map(n => {
             if (!reqMap[n.id]) return n;
             return { ...n, data:{ ...n.data, requirements: reqMap[n.id] } };
           });
+          if (matched > 0) log.push(`Requirements: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
+          else if (unmatched > 0) log.push(`Requirements: ${unmatched}건 모두 미매칭 (Node ID 확인 필요)`);
         }
 
         // ── Scope Register 시트 → Area Node 업데이트 ──
         const wsSc = findSheet("Scope Register","ScopeRegister","Scope");
         if (wsSc) {
           const rows = readSheet(wsSc, "Node ID");
+          let matched = 0, unmatched = 0;
           rows.forEach(row => {
-            const nodeId = pick(row, "Node ID", "").trim();
-            if (!nodeId) return;
-            const idx = updatedNodes.findIndex(n => n.id === nodeId);
-            if (idx === -1) return;
+            const idRaw = pick(row, "Node ID", "");
+            const areaLbl = pick(row, "Area", "");
+            const node = findNodeByIdLoose(idRaw, "", areaLbl);
+            if (!node) { if (idRaw) unmatched++; return; }
+            const idx = updatedNodes.findIndex(n => n.id === node.id);
             const n = updatedNodes[idx];
             const parseStaff = (str) => {
               const obj = {};
@@ -1055,19 +1142,22 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             if ("POSCO 담당" in row && pick(row,"POSCO 담당","")) newData.poscoStaff = parseStaff(pick(row,"POSCO 담당",""));
             if ("Engineering 담당" in row && pick(row,"Engineering 담당","")) newData.engStaff = parseStaff(pick(row,"Engineering 담당",""));
             updatedNodes[idx] = { ...n, data: newData };
-            log.push(`Scope ${pick(row,"WBS Code",nodeId)} → ${nodeId} 반영`);
+            matched++;
           });
+          if (matched) log.push(`Scope Register: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
         // ── Scope of Supply 시트 → Node sos 업데이트 ──
         const wsSOS = findSheet("Scope of Supply","ScopeOfSupply","SoS");
         if (wsSOS) {
           const rows = readSheet(wsSOS, "Node ID");
+          let matched = 0, unmatched = 0;
           rows.forEach(row => {
-            const nodeId = pick(row, "Node ID", "").trim();
-            if (!nodeId) return;
-            const idx = updatedNodes.findIndex(n => n.id === nodeId);
-            if (idx === -1) return;
+            const idRaw = pick(row, "Node ID", "");
+            const nameLbl = pick(row, "이름", "");
+            const node = findNodeByIdLoose(idRaw, nameLbl, nameLbl);
+            if (!node) { if (idRaw||nameLbl) unmatched++; return; }
+            const idx = updatedNodes.findIndex(n => n.id === node.id);
             const n = updatedNodes[idx];
             const posco = {};
             SOS_POSCO_ROLES.forEach(r => {
@@ -1083,14 +1173,20 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               ...n,
               data: { ...n.data, sos: { posco, supplier } }
             };
-            log.push(`SoS ${pick(row,"이름",nodeId)} → ${nodeId} 담당자 반영`);
+            matched++;
           });
+          if (matched) log.push(`Scope of Supply: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
         // 강제 새 배열 (React 변경 감지 보장) + zIndex 정규화
         setNodes(normalizeAreaZIndex([...updatedNodes]));
         setEdges([...updatedEdges]);
-        resolve({ log, msg:`Import 완료 — ${log.length}건 반영` });
+        const msg = log.length > 0
+          ? `Import 완료 — ${log.join(", ")}`
+          : "Import 처리됨 (반영된 변경 없음)";
+        // 콘솔에 상세 로그 출력 (디버깅용)
+        console.log("[MBSE Import]", log);
+        resolve({ log, msg });
       } catch(err) {
         reject(err);
       }
