@@ -1133,7 +1133,29 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         console.group("%c📝 Requirements 시트 처리", "color:#15803d;font-weight:bold");
         const wsR = findSheet("Requirements","Requirement")
                  || findSheetByColumns(["요구사항","Stakeholder","담당자"])
-                 || findSheetByColumns(["요구사항","Stakeholder"]);
+                 || findSheetByColumns(["요구사항","Stakeholder"])
+                 || findSheetByColumns(["요구사항"]);
+
+        if (!wsR) {
+          // 진단: 모든 시트의 처음 5행을 덤프해서 어떤 컬럼이 들어있는지 확인
+          console.warn("⚠ Requirements 시트 못 찾음. 모든 시트 내용 덤프:");
+          Object.keys(wb.Sheets).forEach(name => {
+            const ws = wb.Sheets[name];
+            const raw = XLSX.utils.sheet_to_json(ws, { header:1, defval:null, blankrows:false });
+            console.group(`📑 시트 "${name}" — 총 ${raw.length}행`);
+            // 첫 8행 모두 출력
+            raw.slice(0, 8).forEach((row, i) => {
+              const cells = (row||[]).map(c => {
+                if (c == null) return "";
+                const v = typeof c === "object" && "v" in c ? c.v : c;
+                return String(v).slice(0, 30);
+              });
+              console.log(`  Row ${i}:`, cells);
+            });
+            console.groupEnd();
+          });
+        }
+
         if (wsR) {
           const rows = readSheet(wsR, ["Node ID","Item No.","요구사항","Stakeholder"], "Requirements");
           const reqMap = {};
