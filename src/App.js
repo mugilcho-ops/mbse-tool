@@ -3069,9 +3069,8 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 {(() => {
                   // 표준 spec 필드
                   const standardFields = getSpecFields(d.equipType);
-                  const stdKeys = new Set(standardFields.map(f => f.key));
-                  // d 내에 있지만 표준에 없는 키들 → import된 새 필드로 자동 추가
-                  // (시스템 예약 키 제외)
+                  const stdKeyMap = new Map(standardFields.map(f => [f.key, f]));
+                  // 시스템 예약 키 (Inspector에 별도 표시 안 함)
                   const reserved = new Set([
                     "label","itemNo","equipType","instrCategory","instrType",
                     "handles","requirements","summary","autoInlets","autoOutlets",
@@ -3082,12 +3081,29 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     "ic_resp_from","ic_resp_to","ic_remark","icd_no","ifType",
                     "icd_status","tq_no","tq_status","openItems","icd_ifaDate","icd_ifcDate",
                   ]);
-                  const extraKeys = Object.keys(d||{}).filter(k =>
-                    !stdKeys.has(k) && !reserved.has(k) && d[k] != null && d[k] !== ""
+                  // 데이터에 실제로 있는 키들 — 객체 입력 순서(사양서 import 순서) 유지
+                  const dataKeys = Object.keys(d||{}).filter(k =>
+                    !reserved.has(k) && d[k] != null && d[k] !== ""
                   );
-                  // 새 필드는 label = key (그대로), unit 자동 추출 시도
-                  const extraFields = extraKeys.map(k => ({ key:k, label:k, unit:"", _imported:true }));
-                  return [...standardFields, ...extraFields];
+
+                  // 1) 사양서/데이터에 있는 키를 먼저 배치 (등장 순서대로)
+                  //    - 표준 필드면 표준 label/unit 사용
+                  //    - 표준에 없으면 imported로 표시
+                  const seen = new Set();
+                  const result = [];
+                  dataKeys.forEach(k => {
+                    if (stdKeyMap.has(k)) {
+                      result.push(stdKeyMap.get(k));
+                    } else {
+                      result.push({ key:k, label:k, unit:"", _imported:true });
+                    }
+                    seen.add(k);
+                  });
+                  // 2) 아직 값이 없는 표준 필드도 뒤에 배치 (입력 가능하도록)
+                  standardFields.forEach(f => {
+                    if (!seen.has(f.key)) result.push(f);
+                  });
+                  return result;
                 })().map(({key,label,unit,_imported})=>(
                   <div key={key} style={{ marginBottom:5 }}>
                     <label style={{ ...L, marginBottom:1, display:"flex", alignItems:"center", gap:4 }}>
@@ -3673,12 +3689,46 @@ const SpecImportModal = ({ nodes, onApply, onCancel }) => {
       const qtyMatch = block.match(/수\s*량\s*[\:：]?\s*(\d+)/);
 
       // 사양 추출 함수
+      //  - 패턴 매칭 후 값에서 잔여 노이즈 제거
+      //  - "(m³/h) : 600" → "600"
+      //  - "(barg) : 1.5" → "1.5"
+      //  - "(℃) : 35"     → "35"
+      //  - "600 m³/h"     → "600"
+      const cleanValue = (raw) => {
+        if (!raw) return "";
+        let v = String(raw).trim();
+        // 1) "(단위) :" 또는 "(단위):" 패턴 앞쪽에 있으면 제거
+        //    "(m³/h) : 600" 또는 "(m3/h): 600"
+        v = v.replace(/^\s*\([^)]*\)\s*[:：]?\s*/, "");
+        // 2) 시작 부분의 ":" 만 남은 경우 제거
+        v = v.replace(/^\s*[:：]\s*/, "");
+        // 3) 후행 "(단위)" 제거: "600 (m³/h)"
+        v = v.replace(/\s*\([^)]*\)\s*$/, "");
+        // 4) 후행 일반 단위 strip
+        const commonUnits = [
+          "m³/h","m3/h","Nm³/h","Nm3/h","L/h","l/h","t/h","kg/h","g/l","g/L",
+          "m³","m3","Nm³","Nm3","kW","MW","W","kPa","MPa","Pa",
+          "Bar g","Bar","bar","barg","Bar(g)",
+          "℃","°C","°F","K",
+          "mm","cm","m","inch",
+          "%","ppm","ppb","dB","dB(A)",
+          "kg/cm²","kg/cm2","kgf/cm²","kgf/cm2",
+        ];
+        const sorted = [...commonUnits].sort((a,b) => b.length - a.length);
+        for (const u of sorted) {
+          const re = new RegExp(`\\s*${u.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`, "i");
+          const next = v.replace(re, "").trim();
+          if (next !== v) { v = next; break; }
+        }
+        return v.trim();
+      };
+
       const extractVal = (patterns) => {
         for (const p of patterns) {
           const m = block.match(new RegExp(p + "\\s*[\\:：]?\\s*([^\\n\\r]+)","i"));
           if (m) {
-            const v = m[1].trim().replace(/\s*\/\s*/g," / ");
-            if (v && v !== "-" && v !== "TBD") return v;
+            const cleaned = cleanValue(m[1].replace(/\s*\/\s*/g," / "));
+            if (cleaned && cleaned !== "-" && cleaned !== "TBD") return cleaned;
           }
         }
         return "";
@@ -4316,13 +4366,27 @@ const CanvasInner = () => {
       });
       if (!block) return n;
       // 사양 필드 업데이트 (itemNos, normalizedKeys, equipName, quantity 제외)
+      // — 키 순서를 block(=사양서) 순서대로 보존
       const specData = {};
       Object.entries(block).forEach(([k,v]) => {
         if (!["itemNos","normalizedKeys","equipName","quantity"].includes(k)) specData[k] = v;
       });
       // 설비명도 업데이트 (기존 값 없을 때만)
       if (!n.data.label && block.equipName) specData.label = block.equipName;
-      return { ...n, data: { ...n.data, ...specData } };
+
+      // 키 순서 재구성:
+      //  1) specData(=사양서 순서) 키를 먼저 배치
+      //  2) 그 다음 기존 data 중 specData에 없는 키 (시스템 키, 기존 보존 데이터)
+      // → Inspector에서 사양서 순서대로 표시됨
+      const merged = {};
+      // 1단계: spec 키 먼저
+      Object.entries(specData).forEach(([k,v]) => { merged[k] = v; });
+      // 2단계: 기존 data 중 spec에 없는 키만 추가
+      Object.entries(n.data || {}).forEach(([k,v]) => {
+        if (!(k in merged)) merged[k] = v;
+      });
+
+      return { ...n, data: merged };
     }));
     setShowSpecImport(false);
     setSaveMsg(`✅ 사양서 ${parsedBlocks.length}건 적용 완료`);
