@@ -866,6 +866,40 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
         const wb = XLSX.read(ev.target.result, { type:"array", cellStyles:false, cellFormula:false });
         console.log("📑 워크북에서 발견된 시트:", Object.keys(wb.Sheets));
 
+        // ── DRM 암호화 파일 감지 ─────────────────────────────
+        // DRM이 적용된 파일은 데이터가 알아볼 수 없는 바이너리로 들어옴
+        // 첫 시트의 첫 셀에 "DRM", "encrypted", 또는 제어문자(\x00~\x1F)가 다수 포함되면 암호화로 판단
+        const firstSheet = Object.values(wb.Sheets)[0];
+        if (firstSheet) {
+          const sample = XLSX.utils.sheet_to_json(firstSheet, { header:1, defval:null });
+          const firstRow = sample[0] || [];
+          const firstCellText = firstRow.map(c => {
+            if (c == null) return "";
+            const v = typeof c === "object" && "v" in c ? c.v : c;
+            return String(v);
+          }).join(" ");
+          // DRM 패턴 검출
+          const drmKeywords = ["DRM","encrypted","DRMONE","Fasoo","Markany","SoftCamp"];
+          const hasDRMKeyword = drmKeywords.some(k => firstCellText.includes(k));
+          // 제어문자 비율 (정상 엑셀은 거의 0%)
+          const ctrlChars = (firstCellText.match(/[\x00-\x08\x0E-\x1F]/g)||[]).length;
+          const ctrlRatio = firstCellText.length > 0 ? ctrlChars / firstCellText.length : 0;
+
+          if (hasDRMKeyword || ctrlRatio > 0.1) {
+            console.error("%c❌ DRM 암호화 파일 감지!", "color:#dc2626;font-weight:bold;font-size:14px");
+            console.error("이 파일은 회사 보안 정책(DRM)에 의해 암호화되어 있어 import할 수 없습니다.");
+            console.error("해결 방법:");
+            console.error("  1. Excel에서 파일을 연 뒤 '다른 이름으로 저장' → 외부 폴더(예: 데스크탑)에 저장");
+            console.error("  2. 또는 새 엑셀 파일에 데이터를 복사·붙여넣기 후 외부 폴더에 저장");
+            console.error("  3. IT 보안팀에 DRM 예외 신청");
+            console.groupEnd();
+            const err = new Error("DRM 암호화 파일입니다. 외부 폴더에 새로 저장한 파일을 사용해주세요.");
+            err.code = "DRM_DETECTED";
+            reject(err);
+            return;
+          }
+        }
+
         let updatedNodes = nodes.map(n => ({...n, data:{...(n.data||{})}}));
         let updatedEdges = edges.map(e => ({...e, data:{...(e.data||{})}}));
         const log = [];
@@ -3032,25 +3066,103 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                     {d.equipType}
                   </span>
                 </div>
-                {getSpecFields(d.equipType).map(({key,label,unit})=>(
+                {(() => {
+                  // 표준 spec 필드
+                  const standardFields = getSpecFields(d.equipType);
+                  const stdKeys = new Set(standardFields.map(f => f.key));
+                  // d 내에 있지만 표준에 없는 키들 → import된 새 필드로 자동 추가
+                  // (시스템 예약 키 제외)
+                  const reserved = new Set([
+                    "label","itemNo","equipType","instrCategory","instrType",
+                    "handles","requirements","summary","autoInlets","autoOutlets",
+                    "sos","poscoStaff","engStaff","wbsCode","teamId","discipline",
+                    "scopeText","inclusions","exclusions","vendorName","vendorCountry",
+                    "vendorContract","vendorICA","areaType","ports","_dragging",
+                    "ic_no","ic_status","ic_priority","ic_due","ic_closed",
+                    "ic_resp_from","ic_resp_to","ic_remark","icd_no","ifType",
+                    "icd_status","tq_no","tq_status","openItems","icd_ifaDate","icd_ifcDate",
+                  ]);
+                  const extraKeys = Object.keys(d||{}).filter(k =>
+                    !stdKeys.has(k) && !reserved.has(k) && d[k] != null && d[k] !== ""
+                  );
+                  // 새 필드는 label = key (그대로), unit 자동 추출 시도
+                  const extraFields = extraKeys.map(k => ({ key:k, label:k, unit:"", _imported:true }));
+                  return [...standardFields, ...extraFields];
+                })().map(({key,label,unit,_imported})=>(
                   <div key={key} style={{ marginBottom:5 }}>
-                    <label style={{ ...L, marginBottom:1 }}>
-                      {label}
+                    <label style={{ ...L, marginBottom:1, display:"flex", alignItems:"center", gap:4 }}>
+                      <span>{label}</span>
                       {unit && (
-                        <span style={{ color:"#94a3b8",fontWeight:400,marginLeft:4,fontSize:10 }}>
+                        <span style={{ color:"#94a3b8",fontWeight:400,fontSize:10 }}>
                           {unit}
                         </span>
+                      )}
+                      {_imported && (
+                        <span style={{
+                          fontSize:9,background:"#fef3c7",color:"#92400e",
+                          borderRadius:3,padding:"0 4px",marginLeft:"auto",fontWeight:600
+                        }}>imported</span>
                       )}
                     </label>
                     <input
                       style={{ ...I, marginBottom:0 }}
                       value={(() => {
                         const v = d[key] || "";
-                        if (!unit || !v) return v;
-                        const stripped = v.replace(new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`), "").trim();
+                        if (!v) return "";
+                        // 값 끝에서 단위처럼 보이는 모든 형태를 제거
+                        //  - 라벨에 정의된 unit (exact match)
+                        //  - 일반적인 공학 단위 (대소문자 무시, 변형 허용)
+                        const commonUnits = [
+                          "m³/h","m3/h","Nm³/h","Nm3/h","L/h","l/h","t/h","kg/h",
+                          "m³","m3","Nm³","Nm3","kW","MW","W","kPa","MPa","Pa",
+                          "Bar g","Bar","bar","barg","Bar(g)",
+                          "℃","°C","C","°F","F","K",
+                          "mm","cm","m","inch","\"",
+                          "%","ppm","ppb",
+                          "kg/cm²","kg/cm2","kgf/cm²","kgf/cm2",
+                        ];
+                        let stripped = String(v).trim();
+                        // 1) 라벨 unit 우선 제거
+                        if (unit) {
+                          const re = new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`, "i");
+                          stripped = stripped.replace(re, "").trim();
+                        }
+                        // 2) 일반 단위 제거 (긴 것부터 매칭)
+                        const sorted = [...commonUnits].sort((a,b) => b.length - a.length);
+                        for (const u of sorted) {
+                          const re = new RegExp(`\\s*${u.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`, "i");
+                          const next = stripped.replace(re, "").trim();
+                          if (next !== stripped) { stripped = next; break; }
+                        }
                         return stripped;
                       })()}
                       onChange={e => upN(key, e.target.value)}
+                      onBlur={e => {
+                        // 입력 완료 시점에 값에서 단위 제거하여 데이터 정리
+                        const v = e.target.value;
+                        if (!v) return;
+                        const commonUnits = [
+                          "m³/h","m3/h","Nm³/h","Nm3/h","L/h","l/h","t/h","kg/h",
+                          "m³","m3","Nm³","Nm3","kW","MW","W","kPa","MPa","Pa",
+                          "Bar g","Bar","bar","barg","Bar(g)",
+                          "℃","°C","C","°F","F","K",
+                          "mm","cm","m","inch","\"",
+                          "%","ppm","ppb",
+                          "kg/cm²","kg/cm2","kgf/cm²","kgf/cm2",
+                        ];
+                        let cleaned = String(v).trim();
+                        if (unit) {
+                          const re = new RegExp(`\\s*${unit.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`, "i");
+                          cleaned = cleaned.replace(re, "").trim();
+                        }
+                        const sorted = [...commonUnits].sort((a,b) => b.length - a.length);
+                        for (const u of sorted) {
+                          const re = new RegExp(`\\s*${u.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}\\s*$`, "i");
+                          const next = cleaned.replace(re, "").trim();
+                          if (next !== cleaned) { cleaned = next; break; }
+                        }
+                        if (cleaned !== v) upN(key, cleaned);
+                      }}
                       placeholder=""
                     />
                   </div>
@@ -4316,8 +4428,20 @@ const CanvasInner = () => {
       setXlsxMsg(`✅ ${result.msg}`);
       setTimeout(()=>setXlsxMsg(""), 3000);
     } catch(err) {
-      setXlsxMsg("오류: " + err.message);
-      setTimeout(()=>setXlsxMsg(""), 4000);
+      if (err.code === "DRM_DETECTED") {
+        alert(
+          "이 파일은 회사 보안 정책(DRM)에 의해 암호화되어 import할 수 없습니다.\n\n" +
+          "해결 방법:\n" +
+          "1. Excel에서 파일을 연 뒤 '다른 이름으로 저장' → 데스크탑 등 외부 폴더에 저장\n" +
+          "2. 또는 새 엑셀 파일에 데이터를 복사·붙여넣기 후 외부 폴더에 저장한 뒤 다시 시도\n" +
+          "3. 회사 IT 보안팀에 해당 파일 DRM 예외 처리 신청"
+        );
+        setXlsxMsg("⚠ DRM 암호화 파일 — 외부 폴더에 새로 저장 후 시도");
+        setTimeout(()=>setXlsxMsg(""), 6000);
+      } else {
+        setXlsxMsg("오류: " + err.message);
+        setTimeout(()=>setXlsxMsg(""), 4000);
+      }
     }
     e.target.value="";
   };
