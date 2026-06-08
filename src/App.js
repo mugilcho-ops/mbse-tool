@@ -2092,6 +2092,32 @@ const AreaNode = memo(({ id, data, selected }) => {
         <Handle key={pid} type="source" position={posMap[dir]} id={pid} style={getHStyle(dir,pct)}/>
       ))}
 
+      {/* ── IT 전용 포트 4개 (상부 좌/우, 하부 좌/우) ──
+          보라색 다이아몬드 모양으로 일반 포트와 시각적 차별화
+          ID 에 "it_" prefix → onConnect 에서 IT 라인으로 식별 */}
+      {[
+        { id:"it_tl", pos:Position.Top,    side:"top",    left:"15%" },
+        { id:"it_tr", pos:Position.Top,    side:"top",    left:"85%" },
+        { id:"it_bl", pos:Position.Bottom, side:"bottom", left:"15%" },
+        { id:"it_br", pos:Position.Bottom, side:"bottom", left:"85%" },
+      ].map(p => (
+        <Handle key={p.id} type="source" position={p.pos} id={p.id}
+          style={{
+            width: 12, height: 12,
+            background: "#7c3aed",
+            border: "2px solid #fff",
+            borderRadius: 2,
+            transform: `translateX(-50%) rotate(45deg)`,
+            left: p.left,
+            boxShadow: "0 0 0 1px #7c3aed, 0 2px 4px rgba(124,58,237,0.4)",
+            zIndex: 25,
+            ...(p.side === "top"    ? { top:    -7 } : {}),
+            ...(p.side === "bottom" ? { bottom: -7 } : {}),
+          }}
+          title="IT Line 전용 포트"
+        />
+      ))}
+
       {/* Title bar */}
       <div onDoubleClick={startEdit} style={{
         position:"absolute",top:0,left:0,right:0,
@@ -3024,80 +3050,44 @@ const ITEdge = ({
 
   const itNo      = data?.itNo || "IT-?";
 
-  // 직각 라우팅 (간단 L-shape)
-  const sv  = sourcePosition === "right" ? {dx:1,dy:0}
-            : sourcePosition === "left"  ? {dx:-1,dy:0}
-            : sourcePosition === "bottom"? {dx:0,dy:1}
-            : {dx:0,dy:-1};
-  const tv  = targetPosition === "right" ? {dx:1,dy:0}
-            : targetPosition === "left"  ? {dx:-1,dy:0}
-            : targetPosition === "bottom"? {dx:0,dy:1}
-            : {dx:0,dy:-1};
-  const stub = 30;
-  const sx2 = sourceX + sv.dx*stub, sy2 = sourceY + sv.dy*stub;
-  const tx2 = targetX + tv.dx*stub, ty2 = targetY + tv.dy*stub;
-  // 단순화: 수평 출발+수평 도착이면 중간 분기, 아니면 4점
-  let pts;
-  if (sv.dy===0 && tv.dy===0) {
-    const mx = (sx2+tx2)/2;
-    pts = [
-      {x:sourceX, y:sourceY},
-      {x:sx2, y:sy2},
-      {x:mx, y:sy2},
-      {x:mx, y:ty2},
-      {x:tx2, y:ty2},
-      {x:targetX, y:targetY},
-    ];
-  } else if (sv.dx===0 && tv.dx===0) {
-    const my = (sy2+ty2)/2;
-    pts = [
-      {x:sourceX, y:sourceY},
-      {x:sx2, y:sy2},
-      {x:sx2, y:my},
-      {x:tx2, y:my},
-      {x:tx2, y:ty2},
-      {x:targetX, y:targetY},
-    ];
-  } else if (sv.dy===0) {
-    pts = [
-      {x:sourceX, y:sourceY},
-      {x:sx2, y:sy2},
-      {x:tx2, y:sy2},
-      {x:tx2, y:ty2},
-      {x:targetX, y:targetY},
-    ];
-  } else {
-    pts = [
-      {x:sourceX, y:sourceY},
-      {x:sx2, y:sy2},
-      {x:sx2, y:ty2},
-      {x:tx2, y:ty2},
-      {x:targetX, y:targetY},
-    ];
-  }
+  // ── 라운드 곡선 라우팅 (Cubic Bezier) ─────────────────────
+  // 다른 직각 라인들과 명확히 구분되도록 부드러운 곡선으로 연결
+  // 핸들에서 직선으로 짧게 빠져나온 뒤, 베지어 곡선으로 자연스럽게 연결
+  const dir = (pos) => pos === "right" ? {dx:1,dy:0}
+                     : pos === "left"  ? {dx:-1,dy:0}
+                     : pos === "bottom"? {dx:0,dy:1}
+                     : {dx:0,dy:-1};
+  const sv = dir(sourcePosition);
+  const tv = dir(targetPosition);
 
-  // path 생성 (rounded corners)
-  let dPath = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i=1; i<pts.length; i++) {
-    const p=pts[i-1], q=pts[i], n=pts[i+1];
-    if (!n) { dPath += ` L ${q.x} ${q.y}`; }
-    else {
-      const dx1=q.x-p.x, dy1=q.y-p.y, dx2=n.x-q.x, dy2=n.y-q.y;
-      const l1=Math.hypot(dx1,dy1)||1, l2=Math.hypot(dx2,dy2)||1;
-      const r=Math.min(8, l1/2, l2/2);
-      dPath += ` L ${q.x-(dx1/l1)*r} ${q.y-(dy1/l1)*r}`;
-      dPath += ` Q ${q.x} ${q.y} ${q.x+(dx2/l2)*r} ${q.y+(dy2/l2)*r}`;
-    }
-  }
+  // 두 점 사이 거리에 비례한 곡률 강도
+  // 거리가 길수록 제어점도 멀리 → 자연스러운 S-curve 또는 U-curve
+  const dist = Math.hypot(targetX - sourceX, targetY - sourceY);
+  const curveStrength = Math.max(60, Math.min(dist * 0.45, 220));
 
-  // 라벨 위치: 가장 긴 세그먼트 중앙
-  let longest = {mx:0, my:0, len:0};
-  for (let i=0; i<pts.length-1; i++) {
-    const len = Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].y-pts[i].y);
-    if (len > longest.len) {
-      longest = { mx:(pts[i].x+pts[i+1].x)/2, my:(pts[i].y+pts[i+1].y)/2, len };
-    }
-  }
+  // 제어점: 각 끝점에서 핸들 방향으로 curveStrength만큼 떨어진 점
+  const cp1x = sourceX + sv.dx * curveStrength;
+  const cp1y = sourceY + sv.dy * curveStrength;
+  const cp2x = targetX + tv.dx * curveStrength;
+  const cp2y = targetY + tv.dy * curveStrength;
+
+  // 짧은 핸들 stub (5~8px) 후 곡선 시작 — 화살표 자연 정렬용
+  const stubLen = 6;
+  const sStubX = sourceX + sv.dx * stubLen;
+  const sStubY = sourceY + sv.dy * stubLen;
+  const tStubX = targetX + tv.dx * stubLen;
+  const tStubY = targetY + tv.dy * stubLen;
+
+  const dPath =
+    `M ${sourceX} ${sourceY} ` +
+    `L ${sStubX} ${sStubY} ` +
+    `C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tStubX} ${tStubY} ` +
+    `L ${targetX} ${targetY}`;
+
+  // 라벨 위치: 베지어 곡선의 중간점 (t=0.5)
+  // B(0.5) = 0.125*P0 + 0.375*P1 + 0.375*P2 + 0.125*P3
+  const labelX = 0.125 * sStubX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tStubX;
+  const labelY = 0.125 * sStubY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * tStubY;
 
   return (
     <g>
@@ -3125,7 +3115,7 @@ const ITEdge = ({
         <div
           style={{
             position:"absolute",
-            transform:`translate(-50%,-50%) translate(${longest.mx}px,${longest.my}px)`,
+            transform:`translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
             background:"#7c3aed",
             color:"#fff",
             padding:"3px 10px",
@@ -3971,7 +3961,7 @@ const normalizeItemNos = (rawItemNo) => {
 // IT LINE MODAL — Definition + Check List (v10.3)
 // 캡쳐의 양식 디지털화: 좌측 Definition, 우측 Check List
 // ═══════════════════════════════════════════════════════════════
-const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate }) => {
+const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onDelete }) => {
   const d = edge?.data || {};
 
   // 양쪽 Area 노드 찾기
@@ -3995,6 +3985,8 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate }) =
     const def = makeDefaultITChecklist();
     return d.checklist ? { ...def, ...d.checklist } : def;
   });
+  // 삭제 확인 다이얼로그
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   // 저장
   const handleSave = () => {
@@ -4083,10 +4075,16 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate }) =
                 padding:"5px 12px", borderRadius:5, cursor:"pointer", fontSize:11,
               }}>다음 ▶</button>
             )}
-            <button onClick={onClose} style={{
+            {/* 삭제 버튼 — 확인 후 IT 라인 삭제 */}
+            <button onClick={()=>setShowDeleteConfirm(true)} style={{
               background:"#dc2626", border:"none", color:"#fff",
-              padding:"5px 14px", borderRadius:5, cursor:"pointer", fontSize:11, fontWeight:700,
+              padding:"5px 12px", borderRadius:5, cursor:"pointer", fontSize:11, fontWeight:700,
               marginLeft:10,
+            }} title="이 IT Line 삭제">🗑 삭제</button>
+            {/* 닫기 — 변경사항 무시하고 닫기 */}
+            <button onClick={onClose} style={{
+              background:"rgba(255,255,255,0.25)", border:"none", color:"#fff",
+              padding:"5px 14px", borderRadius:5, cursor:"pointer", fontSize:11, fontWeight:700,
             }}>✕ 닫기</button>
           </div>
         </div>
@@ -4234,6 +4232,63 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate }) =
             borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:700,
           }}>💾 저장</button>
         </div>
+
+        {/* ── 삭제 확인 다이얼로그 ── */}
+        {showDeleteConfirm && (
+          <div style={{
+            position:"absolute", inset:0, background:"rgba(15,23,42,0.55)",
+            display:"flex", alignItems:"center", justifyContent:"center", zIndex:10,
+          }} onClick={()=>setShowDeleteConfirm(false)}>
+            <div onClick={e=>e.stopPropagation()} style={{
+              width:420, background:"#fff", borderRadius:10, overflow:"hidden",
+              boxShadow:"0 20px 50px rgba(0,0,0,0.4)",
+            }}>
+              <div style={{
+                padding:"12px 18px", background:"#dc2626", color:"#fff",
+                display:"flex", alignItems:"center", gap:8,
+              }}>
+                <span style={{ fontSize:20 }}>⚠</span>
+                <span style={{ fontSize:14, fontWeight:800 }}>IT Line 삭제 확인</span>
+              </div>
+              <div style={{ padding:"18px 20px" }}>
+                <div style={{ fontSize:13, color:"#1e293b", marginBottom:10, fontWeight:700 }}>
+                  정말 삭제하시겠습니까?
+                </div>
+                <div style={{ fontSize:12, color:"#475569", lineHeight:1.6, marginBottom:8 }}>
+                  <b style={{ color:"#7c3aed" }}>IT-{itNoSuffix}</b>
+                  {" — "}{sourceName} ↔ {targetName}
+                </div>
+                <div style={{
+                  fontSize:11, color:"#92400e", background:"#fef3c7",
+                  padding:"8px 12px", borderRadius:5, lineHeight:1.5,
+                  border:"1px solid #fcd34d",
+                }}>
+                  이 작업은 되돌릴 수 없습니다.<br/>
+                  Definition · Check List 입력 내용이 모두 사라집니다.
+                  <br/><span style={{ color:"#64748b", fontSize:10 }}>
+                    (단축키 Ctrl+Z 로 잠시는 복구 가능)
+                  </span>
+                </div>
+              </div>
+              <div style={{
+                padding:"10px 18px", borderTop:"1px solid #e2e8f0", background:"#f8fafc",
+                display:"flex", justifyContent:"flex-end", gap:8,
+              }}>
+                <button onClick={()=>setShowDeleteConfirm(false)} style={{
+                  padding:"7px 18px", background:"#fff", border:"1px solid #cbd5e1",
+                  borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:600, color:"#475569",
+                }}>취소</button>
+                <button onClick={()=>{
+                  setShowDeleteConfirm(false);
+                  if (onDelete) onDelete(edge.id);
+                }} style={{
+                  padding:"7px 18px", background:"#dc2626", border:"none", color:"#fff",
+                  borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:700,
+                }}>🗑 삭제 진행</button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -4881,15 +4936,50 @@ const CanvasInner = () => {
 
   // CONNECT — 드래그 힌트 lineType 감지
   const onConnect=useCallback(params=>{
-    connRef.current=params;
-    // source/target 노드가 모두 Area면 IT 라인 옵션 활성화
+    // ── IT 포트 식별 (핸들 ID가 "it_" prefix) ───────────────
+    const srcIsIT = (params.sourceHandle||"").startsWith("it_");
+    const tgtIsIT = (params.targetHandle||"").startsWith("it_");
     const srcNode = nodes.find(n=>n.id===params.source);
     const tgtNode = nodes.find(n=>n.id===params.target);
     const bothArea = srcNode?.type==="area" && tgtNode?.type==="area";
-    setCanBeIT(bothArea);
+
+    // ── Case 1: 양쪽 모두 IT 포트 → 즉시 IT 라인 생성 ──────
+    if (srcIsIT && tgtIsIT && bothArea) {
+      setEdges(es => {
+        const itEdges = es.filter(e => e.type === "itEdge");
+        let maxNum = 0;
+        itEdges.forEach(e => {
+          const m = (e.data?.itNo||"").match(/^IT-(\d+)$/);
+          if (m) maxNum = Math.max(maxNum, parseInt(m[1],10));
+        });
+        const itNo = `IT-${maxNum + 1}`;
+        const newId = uid("it");
+        // 다음 tick 에서 자동으로 모달 열기
+        setTimeout(() => setItModalEdgeId(newId), 50);
+        return addEdge({
+          ...params, id:newId, type:"itEdge",
+          data:{
+            itNo, description:"", supplyByArea:[], functionalDesc:"",
+            influenceFactors:[], checklist: makeDefaultITChecklist(),
+          },
+        }, es);
+      });
+      return;
+    }
+
+    // ── Case 2: 한쪽만 IT 포트 → 연결 거부 (혼용 방지) ─────
+    if (srcIsIT !== tgtIsIT) {
+      setSaveMsg("⚠ IT 포트(보라색)는 IT 포트끼리만 연결할 수 있어요");
+      setTimeout(()=>setSaveMsg(""), 3500);
+      return;
+    }
+
+    // ── Case 3: 일반 포트끼리 → 기존 모달 (Piping 등 선택) ──
+    connRef.current=params;
+    setCanBeIT(bothArea);   // Area↔Area 면 IT 옵션도 표시 (호환성)
     setModalDefault(bothArea ? "IT Line (Area↔Area)" : "Piping");
     setModal(true);
-  },[nodes]);
+  },[nodes,setEdges]);
 
   const confirmConn=useCallback(lineType=>{
     const p=connRef.current; if(!p) return;
@@ -4916,6 +5006,52 @@ const CanvasInner = () => {
     }
     setModal(false); connRef.current=null;
   },[setEdges]);
+
+  // ── IT 라인 끝점 재연결 (드래그로 이동) ──────────────────────
+  // ReactFlow가 reconnectRadius 안에서 핸들을 잡으면 onReconnect 호출
+  // IT 라인은 IT 포트끼리만, 같은 노드가 아니어야 한다는 제약 검증
+  const reconnectingRef = useRef({ valid:false, oldEdge:null });
+  const onReconnectStart = useCallback((_, edge) => {
+    reconnectingRef.current = { valid:true, oldEdge:edge };
+  }, []);
+  const onReconnectEnd = useCallback((_, edge) => {
+    // valid가 false면 새 연결이 안 됐다는 뜻 → 원본 유지 (자동 복원됨)
+    reconnectingRef.current = { valid:false, oldEdge:null };
+  }, []);
+  const onReconnectIT = useCallback((oldEdge, newConnection) => {
+    // IT 라인 전용 — 일반 엣지는 이전에 reconnect 비활성이라 그대로 동작
+    if (oldEdge.type === "itEdge") {
+      // 양쪽 모두 IT 포트인지 확인
+      const srcIsIT = (newConnection.sourceHandle||"").startsWith("it_");
+      const tgtIsIT = (newConnection.targetHandle||"").startsWith("it_");
+      if (!srcIsIT || !tgtIsIT) {
+        setSaveMsg("⚠ IT 포트(보라색)에만 연결할 수 있습니다");
+        setTimeout(()=>setSaveMsg(""), 3000);
+        return;  // 변경 안 함
+      }
+      const srcN = nodes.find(n=>n.id===newConnection.source);
+      const tgtN = nodes.find(n=>n.id===newConnection.target);
+      if (srcN?.type !== "area" || tgtN?.type !== "area") {
+        setSaveMsg("⚠ IT 라인은 Area 간에만 연결 가능합니다");
+        setTimeout(()=>setSaveMsg(""), 3000);
+        return;
+      }
+      if (newConnection.source === newConnection.target) {
+        setSaveMsg("⚠ 같은 Area로 자기연결 불가");
+        setTimeout(()=>setSaveMsg(""), 3000);
+        return;
+      }
+    }
+    // 유효한 재연결 — source/target/handles 업데이트, 데이터는 보존
+    reconnectingRef.current.valid = true;
+    setEdges(es => es.map(e => e.id === oldEdge.id ? {
+      ...e,
+      source:       newConnection.source,
+      target:       newConnection.target,
+      sourceHandle: newConnection.sourceHandle,
+      targetHandle: newConnection.targetHandle,
+    } : e));
+  }, [nodes, setEdges]);
 
   const onNodeClick=useCallback((_,n)=>setSel(n),[]);
   const onEdgeClick=useCallback((_,e)=>{
@@ -5229,6 +5365,12 @@ const CanvasInner = () => {
               nodes={nodes} edges={edges}
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
+              // ── IT 라인 끝점 재연결 (드래그로 다른 IT 포트로 이동) ──
+              onReconnect={onReconnectIT}
+              onReconnectStart={onReconnectStart}
+              onReconnectEnd={onReconnectEnd}
+              edgesReconnectable={true}
+              reconnectRadius={20}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
               onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
@@ -5375,6 +5517,12 @@ const CanvasInner = () => {
             }}
             onClose={() => setItModalEdgeId(null)}
             onNavigate={(newId) => setItModalEdgeId(newId)}
+            onDelete={(id) => {
+              setEdges(es => es.filter(e => e.id !== id));
+              setItModalEdgeId(null);
+              setSaveMsg("🗑 IT Line 삭제됨");
+              setTimeout(()=>setSaveMsg(""), 2500);
+            }}
           />
         );
       })()}
