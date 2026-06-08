@@ -370,6 +370,42 @@ const exportToExcel = async (nodes, edges) => {
   });
 
   // ══════════════════════════════════════════════════════════
+  // v10.3 SHEET: IT Register (Interface Tie-in — Area↔Area)
+  // ══════════════════════════════════════════════════════════
+  const itRows = [];
+  edges.filter(e => e.type === "itEdge").forEach(e => {
+    const d = e.data || {};
+    const srcNode = nodes.find(n => n.id === e.source);
+    const tgtNode = nodes.find(n => n.id === e.target);
+    const srcName = srcNode?.data?.label || srcNode?.id || "";
+    const tgtName = tgtNode?.data?.label || tgtNode?.id || "";
+    // 공급 구분별 → "AreaA:공급처A / AreaB:공급처B"
+    const supplyStr = (d.supplyByArea||[])
+      .map(s => `${s.areaName}: ${s.supplier}`).join(" / ");
+    // 영향인자 → "; " 로 join
+    const influStr = (d.influenceFactors||[]).join("; ");
+    // 체크리스트 카테고리별 펼치기
+    const cl = d.checklist || {};
+    const row = {
+      "IT No.":                 d.itNo || "",
+      "IC&TI Description":      `${srcName} ↔ ${tgtName}`,
+      "Source Area":            srcName,
+      "Target Area":            tgtName,
+      "공급 구분별 Inter-connection": supplyStr,
+      "기능 운영간 Inter-connection": d.functionalDesc || "",
+      "Process 간 주요 영향인자":  influStr,
+    };
+    IT_CHECKLIST_CATEGORIES.forEach(cat => {
+      const v = cl[cat.key] || {};
+      row[`${cat.label} (공급)`]   = v.supplier || "";
+      row[`${cat.label} (주관)`]   = v.responsible || "";
+      row[`${cat.label} (내용)`]   = v.content || "";
+    });
+    row["Edge ID"] = e.id;
+    itRows.push(row);
+  });
+
+  // ══════════════════════════════════════════════════════════
   // v10 SHEET: Scope Register (Area 노드 Scope/Vendor 정보)
   // ══════════════════════════════════════════════════════════
   const scopeRows = [];
@@ -733,6 +769,44 @@ const exportToExcel = async (nodes, edges) => {
     {wch:14},{wch:12},{wch:12},{wch:12},{wch:10},{wch:30},
   ];
 
+  // ── v10.3 SHEET: IT Register ───────────────────────────────
+  const itHdrs = [
+    "IT No.","IC&TI Description","Source Area","Target Area",
+    "공급 구분별 Inter-connection","기능 운영간 Inter-connection","Process 간 주요 영향인자",
+    ...IT_CHECKLIST_CATEGORIES.flatMap(cat => [
+      `${cat.label} (공급)`, `${cat.label} (주관)`, `${cat.label} (내용)`,
+    ]),
+    "Edge ID",
+  ];
+  const itAoa = [
+    [Object.assign(XS.hdr("IT Register — Interface Tie-in (Area↔Area)"), {
+      s: XS.s({ bold:true, sz:12, bg:"5B21B6", fc:"FFFFFF", bc:"5B21B6" })
+    }), ...Array(itHdrs.length-1).fill(null)],
+    itHdrs.map(h => XS.shdr(h)),
+    ...itRows.map((row,i) => itHdrs.map((h) => {
+      const v = row[h] ?? "";
+      const wrap = h.includes("내용") || h.includes("기능 운영") ||
+                   h.includes("영향인자") || h.includes("공급 구분별");
+      return XS.alt(v, i,
+        { h: wrap?"left":"center", wrap,
+          bold: h==="IT No.", fc: h==="IT No."?"7C3AED":"000000" });
+    })),
+    ...(itRows.length===0 ? [[XS.c("등록된 IT Line이 없습니다. (Area↔Area 연결 시 자동 등록)",
+      { italic:true, fc:"94A3B8", h:"center" }), ...Array(itHdrs.length-1).fill(null)]] : []),
+  ];
+  const wsIT = aoaToSheet(itAoa);
+  wsIT["!merges"] = [
+    { s:{r:0,c:0}, e:{r:0,c:itHdrs.length-1} },
+    ...(itRows.length===0 ? [{ s:{r:2,c:0}, e:{r:2,c:itHdrs.length-1} }] : []),
+  ];
+  wsIT["!rows"] = [{hpt:28},{hpt:36},...itRows.map(()=>({hpt:60}))];
+  wsIT["!cols"] = [
+    {wch:8},{wch:32},{wch:18},{wch:18},
+    {wch:30},{wch:36},{wch:30},
+    ...IT_CHECKLIST_CATEGORIES.flatMap(()=>[{wch:8},{wch:10},{wch:30}]),
+    {wch:24},
+  ];
+
   // ── v10 SHEET: Scope Register ──────────────────────────────
   const scHdrs = [
     "WBS Code","Area","Type","Team","Discipline",
@@ -827,6 +901,7 @@ const exportToExcel = async (nodes, edges) => {
   XLSX.utils.book_append_sheet(wb, wsSOS, "Scope of Supply");
   XLSX.utils.book_append_sheet(wb, wsIC,  "IC Register");
   XLSX.utils.book_append_sheet(wb, wsICD, "ICD Register");
+  XLSX.utils.book_append_sheet(wb, wsIT,  "IT Register");
   XLSX.utils.book_append_sheet(wb, wsEq,  "Equipment List");
   XLSX.utils.book_append_sheet(wb, wsCn,  "Connection List");
   XLSX.utils.book_append_sheet(wb, wsSc,  "Scope Register");
@@ -1324,6 +1399,72 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           if (matched) log.push(`Scope of Supply: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
         }
 
+        // ── v10.3: IT Register 시트 → itEdge 업데이트 ──
+        const wsIT = findSheet("IT Register","ITRegister","IT_Register","IT")
+                  || findSheetByColumns(["IT No.","IC&TI Description","Edge ID"])
+                  || findSheetByColumns(["IT No.","Source Area","Target Area"]);
+        if (wsIT) {
+          const rows = readSheet(wsIT, ["Edge ID","IT No.","IC&TI Description"], "IT Register");
+          let matched = 0, unmatched = 0;
+          rows.forEach(row => {
+            const edgeId = pick(row, "Edge ID", "").trim();
+            const itNo   = pick(row, "IT No.", "");
+            // itEdge만 대상
+            const itCandidate = updatedEdges.find(e =>
+              e.type === "itEdge" && (e.id === edgeId || edgeId.endsWith(e.id) || e.id.endsWith(edgeId))
+            );
+            // edgeId 매칭 실패 시 IT No. 로 fallback
+            const edge = itCandidate || updatedEdges.find(e =>
+              e.type === "itEdge" && (e.data?.itNo === itNo)
+            );
+            if (!edge) { if (edgeId || itNo) unmatched++; return; }
+            const idx = updatedEdges.findIndex(e => e.id === edge.id);
+            const e = updatedEdges[idx];
+            const newData = { ...e.data };
+            const apply = (key, dataKey) => {
+              if (key in row) newData[dataKey] = pick(row, key, "");
+            };
+            apply("IT No.", "itNo");
+            apply("기능 운영간 Inter-connection", "functionalDesc");
+
+            // 공급 구분별 → "AreaA: 공급처A / AreaB: 공급처B" 파싱
+            if ("공급 구분별 Inter-connection" in row) {
+              const str = pick(row, "공급 구분별 Inter-connection", "");
+              const parts = str.split("/").map(s => s.trim()).filter(Boolean);
+              if (parts.length > 0) {
+                newData.supplyByArea = parts.map(p => {
+                  const m = p.match(/^(.+?):\s*(.+)$/);
+                  return m ? { areaName: m[1].trim(), supplier: m[2].trim() }
+                           : { areaName: p, supplier: "" };
+                });
+              }
+            }
+            // 영향인자 → "; " 또는 "\n" split
+            if ("Process 간 주요 영향인자" in row) {
+              const str = pick(row, "Process 간 주요 영향인자", "");
+              newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean);
+            }
+            // 체크리스트 카테고리별
+            const cl = { ...(newData.checklist || makeDefaultITChecklist()) };
+            IT_CHECKLIST_CATEGORIES.forEach(cat => {
+              const cur = cl[cat.key] || { supplier:"", responsible:"", content:"" };
+              const next = { ...cur };
+              const supK = `${cat.label} (공급)`;
+              const resK = `${cat.label} (주관)`;
+              const cntK = `${cat.label} (내용)`;
+              if (supK in row) next.supplier    = pick(row, supK, "");
+              if (resK in row) next.responsible = pick(row, resK, "");
+              if (cntK in row) next.content     = pick(row, cntK, "");
+              cl[cat.key] = next;
+            });
+            newData.checklist = cl;
+
+            updatedEdges[idx] = { ...e, data: newData };
+            matched++;
+          });
+          if (matched) log.push(`IT Register: ${matched}건 반영${unmatched?`, ${unmatched}건 미매칭`:""}`);
+        }
+
         // 강제 새 배열 (React 변경 감지 보장) + zIndex 정규화
         const finalNodes = normalizeAreaZIndex([...updatedNodes]);
         const finalEdges = [...updatedEdges];
@@ -1516,6 +1657,29 @@ const POSCO_ORGS = ["PM","운전","정비"];
 // v10.1: Scope of Supply 담당자 역할 정의
 const SOS_POSCO_ROLES    = ["PM","운전","정비"];                                       // 복수 입력
 const SOS_SUPPLIER_ROLES = ["대표","PM","Mech.","Piping","Process","EIC","Civil","Arch"];
+
+// ─────────────────────────────────────────────────────────────
+// v10.3: IT (Interface Tie-in) — Area↔Area 통합 관리
+//   캡쳐의 "Interconnection & Integration 정의" + "Check List" 양식 디지털화
+// ─────────────────────────────────────────────────────────────
+const IT_SUPPLIER_OPTIONS    = ["POSCO","ENC","DX","기타"];
+const IT_RESPONSIBLE_OPTIONS = ["TF조업","TF설비","TF내화물","투엔실","ENC","DX","기타"];
+const IT_CHECKLIST_CATEGORIES = [
+  { key:"supply",  label:"장치 공급구분",      hdrBg:"#FEF3C7", hdrFc:"#92400E" },
+  { key:"process", label:"Process",            hdrBg:"#DBEAFE", hdrFc:"#1E40AF" },
+  { key:"mech",    label:"장치사양 (기계)",    hdrBg:"#FED7AA", hdrFc:"#9A3412" },
+  { key:"refrac",  label:"장치사양 (내화물)",  hdrBg:"#FBCFE8", hdrFc:"#831843" },
+  { key:"eic",     label:"장치사양 (EIC)",     hdrBg:"#BBF7D0", hdrFc:"#14532D" },
+];
+// IT 라인 default checklist 구조
+const makeDefaultITChecklist = () => {
+  const obj = {};
+  IT_CHECKLIST_CATEGORIES.forEach(c => {
+    obj[c.key] = { supplier:"ENC", responsible:"TF조업", content:"" };
+  });
+  return obj;
+};
+
 
 const INSTR_TYPES     = ["Transmitter","Switch","Gauge"];
 const FLUID_PRIMARY   = ["Water","Slurry Water","Gas","Process Gas","Steam","Chemical"];
@@ -2844,9 +3008,152 @@ const SmartGuide = memo(({ guides }) => {
     </svg>
   );
 });
+// ═══════════════════════════════════════════════════════════════
+// IT EDGE — Area↔Area Interface Tie-in (v10.3)
+// 양방향 굵은 보라색 dashed 라인 + IT-N 라벨
+// 클릭 시 Definition + Check List 풀화면 모달 열림
+// ═══════════════════════════════════════════════════════════════
+const ITEdge = ({
+  id, sourceX, sourceY, sourcePosition,
+  targetX, targetY, targetPosition,
+  source, target, data, selected,
+}) => {
+  const stroke    = selected ? "#f59e0b" : "#7c3aed";
+  const sw        = selected ? 4 : 3;
+  const mkId      = `it_arrow_${id}`;
+
+  const itNo      = data?.itNo || "IT-?";
+
+  // 직각 라우팅 (간단 L-shape)
+  const sv  = sourcePosition === "right" ? {dx:1,dy:0}
+            : sourcePosition === "left"  ? {dx:-1,dy:0}
+            : sourcePosition === "bottom"? {dx:0,dy:1}
+            : {dx:0,dy:-1};
+  const tv  = targetPosition === "right" ? {dx:1,dy:0}
+            : targetPosition === "left"  ? {dx:-1,dy:0}
+            : targetPosition === "bottom"? {dx:0,dy:1}
+            : {dx:0,dy:-1};
+  const stub = 30;
+  const sx2 = sourceX + sv.dx*stub, sy2 = sourceY + sv.dy*stub;
+  const tx2 = targetX + tv.dx*stub, ty2 = targetY + tv.dy*stub;
+  // 단순화: 수평 출발+수평 도착이면 중간 분기, 아니면 4점
+  let pts;
+  if (sv.dy===0 && tv.dy===0) {
+    const mx = (sx2+tx2)/2;
+    pts = [
+      {x:sourceX, y:sourceY},
+      {x:sx2, y:sy2},
+      {x:mx, y:sy2},
+      {x:mx, y:ty2},
+      {x:tx2, y:ty2},
+      {x:targetX, y:targetY},
+    ];
+  } else if (sv.dx===0 && tv.dx===0) {
+    const my = (sy2+ty2)/2;
+    pts = [
+      {x:sourceX, y:sourceY},
+      {x:sx2, y:sy2},
+      {x:sx2, y:my},
+      {x:tx2, y:my},
+      {x:tx2, y:ty2},
+      {x:targetX, y:targetY},
+    ];
+  } else if (sv.dy===0) {
+    pts = [
+      {x:sourceX, y:sourceY},
+      {x:sx2, y:sy2},
+      {x:tx2, y:sy2},
+      {x:tx2, y:ty2},
+      {x:targetX, y:targetY},
+    ];
+  } else {
+    pts = [
+      {x:sourceX, y:sourceY},
+      {x:sx2, y:sy2},
+      {x:sx2, y:ty2},
+      {x:tx2, y:ty2},
+      {x:targetX, y:targetY},
+    ];
+  }
+
+  // path 생성 (rounded corners)
+  let dPath = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i=1; i<pts.length; i++) {
+    const p=pts[i-1], q=pts[i], n=pts[i+1];
+    if (!n) { dPath += ` L ${q.x} ${q.y}`; }
+    else {
+      const dx1=q.x-p.x, dy1=q.y-p.y, dx2=n.x-q.x, dy2=n.y-q.y;
+      const l1=Math.hypot(dx1,dy1)||1, l2=Math.hypot(dx2,dy2)||1;
+      const r=Math.min(8, l1/2, l2/2);
+      dPath += ` L ${q.x-(dx1/l1)*r} ${q.y-(dy1/l1)*r}`;
+      dPath += ` Q ${q.x} ${q.y} ${q.x+(dx2/l2)*r} ${q.y+(dy2/l2)*r}`;
+    }
+  }
+
+  // 라벨 위치: 가장 긴 세그먼트 중앙
+  let longest = {mx:0, my:0, len:0};
+  for (let i=0; i<pts.length-1; i++) {
+    const len = Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].y-pts[i].y);
+    if (len > longest.len) {
+      longest = { mx:(pts[i].x+pts[i+1].x)/2, my:(pts[i].y+pts[i+1].y)/2, len };
+    }
+  }
+
+  return (
+    <g>
+      <defs>
+        <marker id={mkId} markerWidth={10} markerHeight={8}
+          refX={9} refY={4} orient="auto" markerUnits="userSpaceOnUse">
+          <polygon points="0,0 10,4 0,8" fill={stroke}/>
+        </marker>
+        <marker id={`${mkId}_start`} markerWidth={10} markerHeight={8}
+          refX={1} refY={4} orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+          <polygon points="0,0 10,4 0,8" fill={stroke}/>
+        </marker>
+      </defs>
+      {/* 히트 영역 */}
+      <path d={dPath} fill="none" stroke="transparent" strokeWidth={20} style={{cursor:"pointer"}}/>
+      {/* 실제 라인 */}
+      <path d={dPath} fill="none"
+        stroke={stroke} strokeWidth={sw}
+        strokeDasharray="8 4"
+        markerEnd={`url(#${mkId})`}
+        markerStart={`url(#${mkId}_start)`}
+        style={{pointerEvents:"none"}}/>
+      {/* IT-N 라벨 (클릭 시 모달 열림) */}
+      <EdgeLabelRenderer>
+        <div
+          style={{
+            position:"absolute",
+            transform:`translate(-50%,-50%) translate(${longest.mx}px,${longest.my}px)`,
+            background:"#7c3aed",
+            color:"#fff",
+            padding:"3px 10px",
+            borderRadius:14,
+            fontSize:12,
+            fontWeight:700,
+            fontFamily:"monospace",
+            border:"2px solid #fff",
+            boxShadow:"0 2px 6px rgba(0,0,0,0.25)",
+            cursor:"pointer",
+            pointerEvents:"all",
+            whiteSpace:"nowrap",
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent("mbse:open-it-modal", { detail:{ id } }));
+          }}
+        >
+          🔗 {itNo}
+        </div>
+      </EdgeLabelRenderer>
+    </g>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────
 const nodeTypes = { area:AreaNode, equipment:EquipmentNode, instrument:InstrumentNode, brench:BrenchNode };
-const edgeTypes = { pipe:PipeEdge };
+const edgeTypes = { pipe:PipeEdge, itEdge:ITEdge };
 
 // ─────────────────────────────────────────────────────────────
 // SIDEBAR
@@ -2907,6 +3214,16 @@ const Sidebar = memo(({ onDragStart }) => {
             {linePreview("Conveyor")}╌╌ {c}
           </div>
         ))}
+        {/* v10.3: IT Line — Area↔Area Interface Tie-in */}
+        <div draggable onDragStart={e=>onDragStart(e,"itLine","IT")}
+          style={{ ...iS("#7c3aed"), borderTop:"1px dashed #c4b5fd", marginTop:6, paddingTop:8 }} {...hov}>
+          <span style={{ display:"inline-flex", alignItems:"center", gap:3, marginRight:6 }}>
+            <span style={{ color:"#7c3aed", fontSize:9 }}>◀</span>
+            <span style={{ display:"inline-block",width:20,height:2.5,background:"#7c3aed",borderRadius:1,borderTop:"1px dashed transparent" }}/>
+            <span style={{ color:"#7c3aed", fontSize:9 }}>▶</span>
+          </span>
+          🔗 IT Line (Area↔Area)
+        </div>
       </Sec>
       <Sec title="Instrument" cat="Instrument">
         {Object.keys(INSTRUMENT_CATS).map(cat=>
@@ -3650,6 +3967,278 @@ const normalizeItemNos = (rawItemNo) => {
   return [...results].filter(Boolean);
 };
 
+// ═══════════════════════════════════════════════════════════════
+// IT LINE MODAL — Definition + Check List (v10.3)
+// 캡쳐의 양식 디지털화: 좌측 Definition, 우측 Check List
+// ═══════════════════════════════════════════════════════════════
+const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate }) => {
+  const d = edge?.data || {};
+
+  // 양쪽 Area 노드 찾기
+  const sourceNode = nodes.find(n => n.id === edge?.source);
+  const targetNode = nodes.find(n => n.id === edge?.target);
+  const sourceName = sourceNode?.data?.label || sourceNode?.id || "?";
+  const targetName = targetNode?.data?.label || targetNode?.id || "?";
+
+  // 로컬 편집 상태
+  const [itNoSuffix, setItNoSuffix] = useState(() =>
+    (d.itNo || "IT-1").replace(/^IT-/, "")
+  );
+  const [description, setDescription] = useState(d.description || "");
+  const [supplyByArea, setSupplyByArea] = useState(() => d.supplyByArea || [
+    { areaName: sourceName, supplier: "P-ENC" },
+    { areaName: targetName, supplier: "P-ENC" },
+  ]);
+  const [functionalDesc, setFunctionalDesc] = useState(d.functionalDesc || "");
+  const [influenceFactors, setInfluenceFactors] = useState(d.influenceFactors || [""]);
+  const [checklist, setChecklist] = useState(() => {
+    const def = makeDefaultITChecklist();
+    return d.checklist ? { ...def, ...d.checklist } : def;
+  });
+
+  // 저장
+  const handleSave = () => {
+    const itNo = `IT-${itNoSuffix.trim() || "1"}`;
+    onSave(edge.id, {
+      itNo,
+      description,
+      supplyByArea,
+      functionalDesc,
+      influenceFactors: influenceFactors.filter(x => x.trim()),
+      checklist,
+    });
+  };
+
+  // 영향인자 추가/삭제
+  const updateFactor = (i, v) => {
+    const next = [...influenceFactors];
+    next[i] = v;
+    setInfluenceFactors(next);
+  };
+  const addFactor = () => setInfluenceFactors([...influenceFactors, ""]);
+  const removeFactor = (i) => setInfluenceFactors(influenceFactors.filter((_, idx) => idx !== i));
+
+  // 공급 구분별 변경
+  const updateSupply = (i, field, v) => {
+    const next = [...supplyByArea];
+    next[i] = { ...next[i], [field]: v };
+    setSupplyByArea(next);
+  };
+
+  // 체크리스트 변경
+  const updateChecklist = (catKey, field, v) => {
+    setChecklist({ ...checklist, [catKey]: { ...checklist[catKey], [field]: v } });
+  };
+
+  // IT 라인 네비게이션
+  const currentIdx = allITEdges.findIndex(e => e.id === edge.id);
+  const prevEdge = currentIdx > 0 ? allITEdges[currentIdx - 1] : null;
+  const nextEdge = currentIdx < allITEdges.length - 1 ? allITEdges[currentIdx + 1] : null;
+
+  const IT_DESC = `${sourceName} ↔ ${targetName}`;
+
+  // 공통 스타일
+  const sectionH = { fontSize:12, fontWeight:700, color:"#1e293b", marginBottom:6,
+                     paddingBottom:4, borderBottom:"2px solid #e2e8f0" };
+  const fieldL   = { fontSize:11, fontWeight:600, color:"#475569", marginBottom:3, display:"block" };
+  const inputS   = { width:"100%", padding:"5px 8px", border:"1px solid #cbd5e1",
+                     borderRadius:4, fontSize:11, boxSizing:"border-box", fontFamily:"inherit" };
+
+  return (
+    <div onClick={onClose} style={{
+      position:"fixed", inset:0, background:"rgba(15,23,42,0.6)", zIndex:1000,
+      display:"flex", alignItems:"center", justifyContent:"center", padding:20,
+    }}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        width:"min(1380px, 96vw)", height:"min(90vh, 880px)",
+        background:"#fff", borderRadius:10, display:"flex", flexDirection:"column",
+        boxShadow:"0 20px 50px rgba(0,0,0,0.3)", overflow:"hidden",
+      }}>
+        {/* ── HEADER ── */}
+        <div style={{
+          padding:"12px 20px", background:"#7c3aed", color:"#fff",
+          display:"flex", alignItems:"center", gap:14,
+        }}>
+          <span style={{ fontSize:18, fontWeight:800 }}>🔗 Interface Tie-in 관리</span>
+          <div style={{ display:"flex", alignItems:"center", gap:6, background:"rgba(255,255,255,0.2)", padding:"3px 10px", borderRadius:6 }}>
+            <span style={{ fontSize:13, fontWeight:700 }}>IT-</span>
+            <input value={itNoSuffix} onChange={e=>setItNoSuffix(e.target.value)}
+              style={{ width:60, padding:"2px 6px", borderRadius:4, border:"none",
+                       fontSize:13, fontWeight:700, color:"#1e293b", textAlign:"center" }}/>
+          </div>
+          <span style={{ fontSize:13, opacity:0.9 }}>{IT_DESC}</span>
+          <div style={{ marginLeft:"auto", display:"flex", gap:6 }}>
+            {prevEdge && (
+              <button onClick={()=>onNavigate(prevEdge.id)} style={{
+                background:"rgba(255,255,255,0.2)", border:"none", color:"#fff",
+                padding:"5px 12px", borderRadius:5, cursor:"pointer", fontSize:11,
+              }}>◀ 이전</button>
+            )}
+            <span style={{ fontSize:11, opacity:0.85, alignSelf:"center" }}>
+              {currentIdx + 1} / {allITEdges.length}
+            </span>
+            {nextEdge && (
+              <button onClick={()=>onNavigate(nextEdge.id)} style={{
+                background:"rgba(255,255,255,0.2)", border:"none", color:"#fff",
+                padding:"5px 12px", borderRadius:5, cursor:"pointer", fontSize:11,
+              }}>다음 ▶</button>
+            )}
+            <button onClick={onClose} style={{
+              background:"#dc2626", border:"none", color:"#fff",
+              padding:"5px 14px", borderRadius:5, cursor:"pointer", fontSize:11, fontWeight:700,
+              marginLeft:10,
+            }}>✕ 닫기</button>
+          </div>
+        </div>
+
+        {/* ── BODY (2-column) ── */}
+        <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr 1.3fr", gap:0, overflow:"hidden" }}>
+          {/* ─── LEFT: Definition ─── */}
+          <div style={{ padding:"16px 20px", overflowY:"auto", borderRight:"1px solid #e2e8f0", background:"#fafbfd" }}>
+            <div style={{ fontSize:14, fontWeight:800, color:"#7c3aed", marginBottom:12,
+                          padding:"6px 10px", background:"#f3e8ff", borderRadius:6,
+                          display:"flex", alignItems:"center", gap:6 }}>
+              📐 Definition
+            </div>
+
+            <div style={{ marginBottom:14 }}>
+              <label style={fieldL}>IC&TI Description</label>
+              <div style={{ padding:"8px 10px", background:"#fff", border:"1px solid #cbd5e1",
+                            borderRadius:5, fontSize:12, fontWeight:600, color:"#1e293b" }}>
+                <span style={{ color:"#2563eb" }}>{sourceName}</span>
+                <span style={{ margin:"0 8px", color:"#7c3aed" }}>↔</span>
+                <span style={{ color:"#dc2626" }}>{targetName}</span>
+              </div>
+              <input value={description} onChange={e=>setDescription(e.target.value)}
+                style={{ ...inputS, marginTop:5 }}
+                placeholder="추가 설명 (선택)"/>
+            </div>
+
+            <div style={{ marginBottom:14 }}>
+              <label style={fieldL}>공급 구분별 Inter-connection</label>
+              {supplyByArea.map((sup, i) => (
+                <div key={i} style={{ display:"flex", gap:6, marginBottom:5, alignItems:"center" }}>
+                  <input value={sup.areaName} onChange={e=>updateSupply(i, "areaName", e.target.value)}
+                    style={{ ...inputS, flex:1.5 }} placeholder="Area"/>
+                  <span style={{ color:"#94a3b8", fontSize:11 }}>:</span>
+                  <input value={sup.supplier} onChange={e=>updateSupply(i, "supplier", e.target.value)}
+                    style={{ ...inputS, flex:1 }} placeholder="공급처 (e.g. P-ENC)"/>
+                </div>
+              ))}
+            </div>
+
+            <div style={{ marginBottom:14 }}>
+              <label style={fieldL}>기능 운영간 Inter-connection (서술)</label>
+              <textarea value={functionalDesc} onChange={e=>setFunctionalDesc(e.target.value)}
+                style={{ ...inputS, minHeight:80, resize:"vertical", lineHeight:1.4 }}
+                placeholder="예: HyREX TUF & Bucket Elevator 는 Diverter Chute & Oxide Bin 의 가동조건에 따름..."/>
+            </div>
+
+            <div>
+              <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:5 }}>
+                <label style={{ ...fieldL, marginBottom:0 }}>Process 간 주요 영향인자</label>
+                <button onClick={addFactor} style={{
+                  background:"#7c3aed", color:"#fff", border:"none", borderRadius:4,
+                  padding:"2px 8px", fontSize:10, cursor:"pointer", fontWeight:700,
+                }}>+ 추가</button>
+              </div>
+              {influenceFactors.map((f, i) => (
+                <div key={i} style={{ display:"flex", gap:5, marginBottom:4, alignItems:"center" }}>
+                  <span style={{ fontSize:11, color:"#7c3aed", fontWeight:700, width:18 }}>{i+1}.</span>
+                  <input value={f} onChange={e=>updateFactor(i, e.target.value)}
+                    style={{ ...inputS, flex:1 }} placeholder="영향인자 (예: HyREX TUF 가동 여부 확인)"/>
+                  <button onClick={()=>removeFactor(i)} style={{
+                    background:"none", border:"none", color:"#dc2626", cursor:"pointer",
+                    fontSize:14, padding:"0 4px",
+                  }}>×</button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* ─── RIGHT: Check List ─── */}
+          <div style={{ padding:"16px 20px", overflowY:"auto", background:"#fff" }}>
+            <div style={{ fontSize:14, fontWeight:800, color:"#facc15", marginBottom:12,
+                          padding:"6px 10px", background:"#fef9c3", borderRadius:6,
+                          color:"#854d0e", display:"flex", alignItems:"center", gap:6 }}>
+              ✓ Check List
+            </div>
+
+            {/* IT-x, Description, 영향인자 요약 */}
+            <div style={{ marginBottom:12, padding:"8px 10px", background:"#f8fafc",
+                          borderRadius:5, fontSize:11, color:"#475569",
+                          border:"1px solid #e2e8f0" }}>
+              <div><b style={{ color:"#7c3aed" }}>Interface No.</b> IT-{itNoSuffix}</div>
+              <div><b style={{ color:"#7c3aed" }}>Description.</b> {IT_DESC}</div>
+              <div style={{ marginTop:4 }}>
+                <b style={{ color:"#7c3aed" }}>주요 영향인자:</b>{" "}
+                {influenceFactors.filter(f=>f.trim()).join(" · ") || <i style={{color:"#94a3b8"}}>입력 필요</i>}
+              </div>
+            </div>
+
+            {/* 각 카테고리 */}
+            {IT_CHECKLIST_CATEGORIES.map(cat => {
+              const cl = checklist[cat.key] || { supplier:"", responsible:"", content:"" };
+              const filled = (cl.content||"").trim().length > 0;
+              return (
+                <div key={cat.key} style={{
+                  marginBottom:10, border:`1px solid ${cat.hdrFc}40`, borderRadius:6, overflow:"hidden",
+                }}>
+                  {/* 헤더 — 카테고리명 + 공급/주관 선택 + 작성 상태 */}
+                  <div style={{
+                    padding:"6px 10px", background:cat.hdrBg, color:cat.hdrFc,
+                    display:"grid", gridTemplateColumns:"1.5fr 1fr 1.2fr auto",
+                    gap:8, alignItems:"center", fontSize:11, fontWeight:700,
+                  }}>
+                    <span>{cat.label}</span>
+                    <select value={cl.supplier} onChange={e=>updateChecklist(cat.key,"supplier",e.target.value)}
+                      style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
+                               fontSize:10, fontWeight:600, color:"#1e293b" }}>
+                      <option value="">공급</option>
+                      {IT_SUPPLIER_OPTIONS.map(x=><option key={x}>{x}</option>)}
+                    </select>
+                    <select value={cl.responsible} onChange={e=>updateChecklist(cat.key,"responsible",e.target.value)}
+                      style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
+                               fontSize:10, fontWeight:600, color:"#1e293b" }}>
+                      <option value="">주관</option>
+                      {IT_RESPONSIBLE_OPTIONS.map(x=><option key={x}>{x}</option>)}
+                    </select>
+                    <span style={{
+                      fontSize:9, padding:"1px 6px", borderRadius:3,
+                      background: filled ? "#16a34a" : "#cbd5e1", color:"#fff", fontWeight:700,
+                    }}>{filled ? "작성됨" : "미작성"}</span>
+                  </div>
+                  {/* 내용 입력 */}
+                  <textarea value={cl.content} onChange={e=>updateChecklist(cat.key,"content",e.target.value)}
+                    style={{
+                      width:"100%", padding:"6px 10px", border:"none", borderTop:`1px dashed ${cat.hdrFc}40`,
+                      fontSize:11, resize:"vertical", minHeight:50, boxSizing:"border-box",
+                      fontFamily:"inherit", lineHeight:1.4, outline:"none",
+                    }}
+                    placeholder={`${cat.label} 관련 점검/논의 내용...`}/>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* ── FOOTER ── */}
+        <div style={{ padding:"10px 20px", borderTop:"1px solid #e2e8f0",
+                      display:"flex", justifyContent:"flex-end", gap:8, background:"#f8fafc" }}>
+          <button onClick={onClose} style={{
+            padding:"7px 18px", background:"#fff", border:"1px solid #cbd5e1",
+            borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:600, color:"#475569",
+          }}>취소</button>
+          <button onClick={handleSave} style={{
+            padding:"7px 22px", background:"#7c3aed", border:"none", color:"#fff",
+            borderRadius:5, cursor:"pointer", fontSize:12, fontWeight:700,
+          }}>💾 저장</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────
 // SPEC IMPORT MODAL
 // 사양서 텍스트 붙여넣기 → Item No. 기준 자동 매핑
@@ -3990,24 +4579,35 @@ const LogDetailModal = ({ log, onClose }) => {
   );
 };
 
-const ConnModal = ({ onConfirm, onCancel, defaultType="Piping" }) => {
+const ConnModal = ({ onConfirm, onCancel, defaultType="Piping", canBeIT=false }) => {
   const [lt,setLt]=useState(defaultType);
   useEffect(()=>setLt(defaultType),[defaultType]);
+  const isIT = lt === "IT Line (Area↔Area)";
   return (
     <div style={{ position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:9999 }}>
-      <div style={{ background:"#fff",borderRadius:10,padding:24,minWidth:260,boxShadow:"0 8px 30px rgba(0,0,0,0.18)" }}>
+      <div style={{ background:"#fff",borderRadius:10,padding:24,minWidth:280,boxShadow:"0 8px 30px rgba(0,0,0,0.18)" }}>
         <div style={{ fontWeight:800,fontSize:15,marginBottom:14,color:"#0f172a" }}>New Connection</div>
         <label style={{ fontSize:12,color:"#64748b",display:"block",marginBottom:4 }}>Line Type</label>
         <select value={lt} onChange={e=>setLt(e.target.value)} style={{ width:"100%",padding:"6px 8px",border:"1px solid #e2e8f0",borderRadius:6,fontSize:13,marginBottom:16 }}>
           {[...CONNECTION_LIST,...CONVEYOR_LIST].map(c=><option key={c}>{c}</option>)}
+          {canBeIT && <option value="IT Line (Area↔Area)">🔗 IT Line (Interface Tie-in)</option>}
         </select>
         {/* 색상 미리보기 */}
         <div style={{ display:"flex",alignItems:"center",gap:8,marginBottom:16 }}>
-          <div style={{ width:50,height:LINE_STYLE[lt]?.sw||2,background:LINE_STYLE[lt]?.color||"#94a3b8",borderRadius:2 }}/>
-          <span style={{ fontSize:11,color:"#64748b" }}>{lt}</span>
+          {isIT ? (
+            <>
+              <div style={{ width:50,height:3,background:"#7c3aed",borderRadius:2,borderTop:"1px dashed transparent" }}/>
+              <span style={{ fontSize:11,color:"#7c3aed",fontWeight:700 }}>양방향 IT 라인 — Area↔Area</span>
+            </>
+          ) : (
+            <>
+              <div style={{ width:50,height:LINE_STYLE[lt]?.sw||2,background:LINE_STYLE[lt]?.color||"#94a3b8",borderRadius:2 }}/>
+              <span style={{ fontSize:11,color:"#64748b" }}>{lt}</span>
+            </>
+          )}
         </div>
         <div style={{ display:"flex",gap:8 }}>
-          <button onClick={()=>onConfirm(lt)} style={{ flex:1,background:"#1d4ed8",color:"#fff",border:"none",borderRadius:6,padding:"8px",cursor:"pointer",fontWeight:700 }}>Create</button>
+          <button onClick={()=>onConfirm(lt)} style={{ flex:1,background: isIT?"#7c3aed":"#1d4ed8",color:"#fff",border:"none",borderRadius:6,padding:"8px",cursor:"pointer",fontWeight:700 }}>Create</button>
           <button onClick={onCancel} style={{ flex:1,background:"#f1f5f9",color:"#334155",border:"1px solid #e2e8f0",borderRadius:6,padding:"8px",cursor:"pointer" }}>Cancel</button>
         </div>
       </div>
@@ -4026,6 +4626,9 @@ const CanvasInner = () => {
   const [sel,setSel]       = useState(null);
   const [modal,setModal]   = useState(false);
   const [modalDefault,setModalDefault] = useState("Piping");
+  const [canBeIT, setCanBeIT] = useState(false);
+  // v10.3: IT Line modal — 클릭한 IT edge id
+  const [itModalEdgeId, setItModalEdgeId] = useState(null);
   const [guides,setGuides] = useState([]);
   const [showSpecImport, setShowSpecImport] = useState(false); // Smart Guide 가상선
   const connRef     = useRef(null);
@@ -4181,9 +4784,16 @@ const CanvasInner = () => {
     };
     window.addEventListener("mbse:updatelabel",fn);
     window.addEventListener("mbse:updatewaypoint",fn);
+    // v10.3: IT 라인 라벨 클릭 시 모달 열기
+    const openIT = (ev) => {
+      const id = ev.detail?.id;
+      if (id) setItModalEdgeId(id);
+    };
+    window.addEventListener("mbse:open-it-modal", openIT);
     return()=>{
       window.removeEventListener("mbse:updatelabel",fn);
       window.removeEventListener("mbse:updatewaypoint",fn);
+      window.removeEventListener("mbse:open-it-modal", openIT);
     };
   },[setNodes,setEdges]);
 
@@ -4202,6 +4812,12 @@ const CanvasInner = () => {
       setNodes(ns=>[...ns,{ id:uid("area"),type:"area",position:pos,style:{ width:260,height:180 },
         data:{ areaType:sub,label:"",summary:"",requirements:[],autoInlets:[],autoOutlets:[],handles:["top","bottom","left","right"] },
         zIndex: zMap[sub] ?? -10 }]);
+    } else if(cat==="itLine"){
+      // IT Line은 두 Area 노드를 연결해야 생성되므로 단순 드롭으로는 만들지 않음
+      // 안내: Area↔Area 핸들 연결 시 자동으로 IT Line 옵션이 모달에 표시됨
+      setSaveMsg("ℹ IT Line은 두 Area 사이의 핸들을 직접 끌어 연결하세요");
+      setTimeout(()=>setSaveMsg(""), 3500);
+      return;
     } else if(cat==="equipment"){
       const def=EQUIP_DEFAULTS[sub]||{};
       setNodes(ns=>[...ns,{ id:uid("eq"),type:"equipment",position:pos,
@@ -4266,21 +4882,46 @@ const CanvasInner = () => {
   // CONNECT — 드래그 힌트 lineType 감지
   const onConnect=useCallback(params=>{
     connRef.current=params;
-    // source 노드의 _hint 로 default lineType 결정
-    const srcNode=params.source;
-    // 기본값 Piping
-    setModalDefault("Piping");
+    // source/target 노드가 모두 Area면 IT 라인 옵션 활성화
+    const srcNode = nodes.find(n=>n.id===params.source);
+    const tgtNode = nodes.find(n=>n.id===params.target);
+    const bothArea = srcNode?.type==="area" && tgtNode?.type==="area";
+    setCanBeIT(bothArea);
+    setModalDefault(bothArea ? "IT Line (Area↔Area)" : "Piping");
     setModal(true);
-  },[]);
+  },[nodes]);
 
   const confirmConn=useCallback(lineType=>{
     const p=connRef.current; if(!p) return;
-    setEdges(es=>addEdge({ ...p,id:uid("e"),type:"pipe",data:{ lineType } },es));
+    if (lineType === "IT Line (Area↔Area)") {
+      // 자동 IT-N 번호 부여 (기존 IT 라인 중 최대값+1)
+      setEdges(es => {
+        const itEdges = es.filter(e => e.type === "itEdge");
+        let maxNum = 0;
+        itEdges.forEach(e => {
+          const m = (e.data?.itNo||"").match(/^IT-(\d+)$/);
+          if (m) maxNum = Math.max(maxNum, parseInt(m[1],10));
+        });
+        const itNo = `IT-${maxNum + 1}`;
+        return addEdge({
+          ...p, id:uid("it"), type:"itEdge",
+          data:{
+            itNo, description:"", supplyByArea:[], functionalDesc:"",
+            influenceFactors:[], checklist: makeDefaultITChecklist(),
+          },
+        }, es);
+      });
+    } else {
+      setEdges(es=>addEdge({ ...p,id:uid("e"),type:"pipe",data:{ lineType } },es));
+    }
     setModal(false); connRef.current=null;
   },[setEdges]);
 
   const onNodeClick=useCallback((_,n)=>setSel(n),[]);
-  const onEdgeClick=useCallback((_,e)=>setSel(e),[]);
+  const onEdgeClick=useCallback((_,e)=>{
+    setSel(e);
+    if (e.type === "itEdge") setItModalEdgeId(e.id);
+  },[]);
   const onPaneClick=useCallback(()=>setSel(null),[]);
 
   // ── Live re-routing: 드래그 시작 시 연결 엣지에 _dragging 플래그 ──
@@ -4716,7 +5357,27 @@ const CanvasInner = () => {
           )}
         </div>
       </div>
-      {modal&&<ConnModal defaultType={modalDefault} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; }}/>}
+      {modal&&<ConnModal defaultType={modalDefault} canBeIT={canBeIT} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; setCanBeIT(false); }}/>}
+
+      {/* v10.3: IT Line Definition + Check List 모달 */}
+      {itModalEdgeId && (() => {
+        const itEdge = edges.find(e => e.id === itModalEdgeId && e.type === "itEdge");
+        if (!itEdge) return null;
+        const allITEdges = edges.filter(e => e.type === "itEdge");
+        return (
+          <ITLineModal
+            edge={itEdge}
+            nodes={nodes}
+            allITEdges={allITEdges}
+            onSave={(id, newData) => {
+              setEdges(es => es.map(e => e.id === id ? { ...e, data: { ...e.data, ...newData } } : e));
+              setItModalEdgeId(null);
+            }}
+            onClose={() => setItModalEdgeId(null)}
+            onNavigate={(newId) => setItModalEdgeId(newId)}
+          />
+        );
+      })()}
 
       {/* 사양서 자동 입력 모달 */}
       {showSpecImport && (
