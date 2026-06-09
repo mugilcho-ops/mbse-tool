@@ -2522,13 +2522,15 @@ const portVec = pos => {
 // 출력: orthogonal path 포인트 배열 (없으면 null)
 // ═══════════════════════════════════════════════════════════════
 const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
-  // 시작점에서 포트 방향으로 살짝 이탈한 지점부터 탐색 (장애물 안 진입 방지)
+  // 시작점에서 포트 방향으로 충분히 이탈한 지점부터 탐색
+  // (단 1 grid가 아닌 STUB_GRIDS 만큼 → Block 연결부 직선 구간 확보)
   const sv = portVec(sDir);
   const tv = portVec(tDir);
-  const startX = sx + sv.dx * GRID;
-  const startY = sy + sv.dy * GRID;
-  const endX   = tx + tv.dx * GRID;
-  const endY   = ty + tv.dy * GRID;
+  const STUB_GRIDS = 2;   // 포트에서 2 grid(20px) 직선 이탈 후 탐색 시작
+  const startX = sx + sv.dx * GRID * STUB_GRIDS;
+  const startY = sy + sv.dy * GRID * STUB_GRIDS;
+  const endX   = tx + tv.dx * GRID * STUB_GRIDS;
+  const endY   = ty + tv.dy * GRID * STUB_GRIDS;
 
   // 좌표를 grid 단위로 변환
   const gSx = Math.round(startX / GRID), gSy = Math.round(startY / GRID);
@@ -2599,14 +2601,18 @@ const findPathAStar = (sx, sy, sDir, tx, ty, tDir, obstacles, bounds) => {
     if (cur.gx === gTx && cur.gy === gTy) {
       // 경로 복원: 시작점/끝점 stub 포함
       const path = [{ x: sx, y: sy }]; // 실제 src 포트
+      // src stub 점 (포트 방향 직선 확보)
+      path.push({ x: startX, y: startY });
       let n = cur;
       const grid = [];
       while (n) {
         grid.unshift({ x: n.gx * GRID, y: n.gy * GRID });
         n = n.parent;
       }
-      // grid 경로 추가 + 끝점 stub
+      // grid 경로 추가
       grid.forEach(p => path.push(p));
+      // tgt stub 점 + 끝점
+      path.push({ x: endX, y: endY });
       path.push({ x: tx, y: ty });
       return path;
     }
@@ -2813,6 +2819,173 @@ const avoidObstacles = (pts, obstacles) => {
   return res;
 };
 
+// ═══════════════════════════════════════════════════════════════
+// v10.6 라우팅 품질 개선 헬퍼 (3대 문제 해결)
+// ═══════════════════════════════════════════════════════════════
+
+// ── 문제 1: 끝점 수직 stub 강제 ─────────────────────────────
+// 포트(화살표)에서 핸들 방향으로 최소 stubLen 직선 확보
+// → Block 연결부에서 화살표 수직 방향 직선 구간 보장
+const PIPE_STUB = 24;   // Pipe 라인 끝점 최소 직선 (px)
+const enforceEndpointStubs = (pts, srcPos, tgtPos, stubLen = PIPE_STUB) => {
+  if (!pts || pts.length < 2) return pts;
+  const sv = portVec(srcPos);
+  const tv = portVec(tgtPos);
+  const result = pts.map(p => ({ ...p }));
+
+  // Source stub: 첫 세그먼트가 포트 방향으로 stubLen 이상 진행하는지 확인
+  const s0 = result[0], s1 = result[1];
+  const sProgress = (s1.x - s0.x) * sv.dx + (s1.y - s0.y) * sv.dy;
+  // 포트 방향과 수직(엇나간) 성분
+  const sPerp = Math.abs((s1.x - s0.x) * sv.dy) + Math.abs((s1.y - s0.y) * sv.dx);
+  if (sProgress < stubLen - 0.5 || sPerp > 0.5) {
+    // stub 점 강제 삽입 (포트 방향으로 stubLen)
+    result.splice(1, 0, {
+      x: s0.x + sv.dx * stubLen,
+      y: s0.y + sv.dy * stubLen,
+    });
+  }
+
+  // Target stub: 마지막 세그먼트
+  const t0 = result[result.length - 1], t1 = result[result.length - 2];
+  const tProgress = (t1.x - t0.x) * tv.dx + (t1.y - t0.y) * tv.dy;
+  const tPerp = Math.abs((t1.x - t0.x) * tv.dy) + Math.abs((t1.y - t0.y) * tv.dx);
+  if (tProgress < stubLen - 0.5 || tPerp > 0.5) {
+    result.splice(result.length - 1, 0, {
+      x: t0.x + tv.dx * stubLen,
+      y: t0.y + tv.dy * stubLen,
+    });
+  }
+  return normalizePath(result);
+};
+
+// ── 문제 2: 경로 단순화 ("산 모양" 펴기) ────────────────────
+// A* grid 결과의 불필요한 계단식 꺾임 제거
+// 같은 방향으로 갈 수 있는데 지그재그로 가는 구간을 직선화
+const simplifyPath = (pts, obstacles) => {
+  if (!pts || pts.length < 3) return pts;
+
+  // 선분-박스 교차 검사 (장애물 통과 여부)
+  const segHitsBox = (x1,y1,x2,y2,box) => {
+    const minX=Math.min(x1,x2)-0.5, maxX=Math.max(x1,x2)+0.5;
+    const minY=Math.min(y1,y2)-0.5, maxY=Math.max(y1,y2)+0.5;
+    return !(maxX<box.x1||minX>box.x2||maxY<box.y1||minY>box.y2);
+  };
+  const pathClear = (a, b) => {
+    if (!obstacles) return true;
+    for (const box of obstacles) {
+      if (segHitsBox(a.x, a.y, b.x, b.y, box)) return false;
+    }
+    return true;
+  };
+
+  let work = pts.map(p => ({ ...p }));
+
+  // 반복: "ㄷ"자/계단형 꺾임을 L자로 단순화
+  for (let pass = 0; pass < 4; pass++) {
+    let changed = false;
+    const out = [work[0]];
+    let i = 0;
+    while (i < work.length - 1) {
+      const a = work[i];
+      // a에서 갈 수 있는 가장 먼 점 j 찾기 (직각 유지 + 장애물 회피)
+      let bestJ = i + 1;
+      for (let j = i + 2; j < work.length; j++) {
+        const c = work[j];
+        // a→c 가 순수 수평 또는 수직이고 장애물 없으면 직선화 가능
+        const isOrtho = Math.abs(a.x - c.x) < 1 || Math.abs(a.y - c.y) < 1;
+        if (isOrtho && pathClear(a, c)) {
+          bestJ = j;
+          changed = true;
+        }
+      }
+      out.push(work[bestJ]);
+      i = bestJ;
+    }
+    work = normalizePath(out);
+    if (!changed) break;
+  }
+
+  // "ㄷ"자 우회 단순화: 3점이 같은 축으로 되돌아가면 中점 제거 시도
+  // (예: 오른쪽→위→오른쪽 보다 한 번에 가는 게 가능하면)
+  for (let pass = 0; pass < 3; pass++) {
+    if (work.length < 4) break;
+    let changed = false;
+    for (let i = 1; i < work.length - 2; i++) {
+      const p0 = work[i-1], p1 = work[i], p2 = work[i+1], p3 = work[i+2];
+      // p1-p2 세그먼트를 없애고 p0에서 p3로 L자로 갈 수 있나?
+      // 후보 1: p0 → (p3.x, p0.y) → p3
+      const cand1 = { x: p3.x, y: p0.y };
+      if (pathClear(p0, cand1) && pathClear(cand1, p3)) {
+        work.splice(i, 2, cand1);
+        work = normalizePath(work);
+        changed = true;
+        break;
+      }
+      // 후보 2: p0 → (p0.x, p3.y) → p3
+      const cand2 = { x: p0.x, y: p3.y };
+      if (pathClear(p0, cand2) && pathClear(cand2, p3)) {
+        work.splice(i, 2, cand2);
+        work = normalizePath(work);
+        changed = true;
+        break;
+      }
+    }
+    if (!changed) break;
+  }
+
+  return work;
+};
+
+// ── 문제 2 보조: 자동 경로에 조정 가능한 waypoint 삽입 ──────
+// 중간 세그먼트 중앙에 waypoint를 넣어 사용자가 핸들로 잡을 수 있게 함
+const insertMidWaypoints = (pts) => {
+  if (!pts || pts.length < 2) return pts;
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i+1];
+    const isFirst = i === 0, isLast = i === pts.length - 2;
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!isFirst && !isLast && len > 16) {
+      out.push({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+    }
+    out.push(b);
+  }
+  return out;
+};
+
+// ── 문제 3: 노드 이동 시 직각 보정 ──────────────────────────
+// endpoint(포트)가 이동했을 때, 인접 세그먼트를 수평/수직으로 복원
+// waypoint는 절대좌표라 endpoint만 따라가면 사선이 생기는 것을 방지
+const reorthogonalizePath = (pts, srcPos, tgtPos) => {
+  if (!pts || pts.length < 2) return pts;
+  const sv = portVec(srcPos);
+  const tv = portVec(tgtPos);
+  const r = pts.map(p => ({ ...p }));
+
+  // Source: 첫 waypoint를 포트 방향 축에 맞춤
+  if (r.length >= 2) {
+    const s0 = r[0], s1 = r[1];
+    if (sv.dx !== 0) {
+      // 수평 포트 → 첫 세그먼트는 수평이어야 함 → s1.y = s0.y
+      r[1] = { ...s1, y: s0.y };
+    } else {
+      // 수직 포트 → 첫 세그먼트는 수직이어야 함 → s1.x = s0.x
+      r[1] = { ...s1, x: s0.x };
+    }
+  }
+  // Target: 마지막 waypoint를 포트 방향 축에 맞춤
+  if (r.length >= 2) {
+    const t0 = r[r.length-1], t1 = r[r.length-2];
+    if (tv.dx !== 0) {
+      r[r.length-2] = { ...t1, y: t0.y };
+    } else {
+      r[r.length-2] = { ...t1, x: t0.x };
+    }
+  }
+  return normalizePath(r);
+};
+
 // ── SVG Rounded Elbow path ────────────────────────────────────
 const buildElbowPath = (pts, r=ELBOW_R) => {
   if (!pts||pts.length<2) return "";
@@ -2907,52 +3080,48 @@ const PipeEdge = ({
   const isDragging = data?._dragging===true;
 
   // 경로 계산:
-  //  - 수동 waypoints 있음 → 그대로 사용
+  //  - 수동 waypoints 있음 → 정규화 + endpoint 직각 보정 (문제 3 해결)
   //  - 드래그 중 → 빠른 L-shape 라우팅 (avoidObstacles)
-  //  - 정상 상태 → A* 정밀 라우팅 (실패 시 L-shape 폴백)
+  //  - 정상 상태 → A* → 단순화 → stub 강제 (문제 1·2 해결)
   const pts = useMemo(()=>{
+    const sPos = sourcePosition||"right";
+    const tPos = targetPosition||"left";
+
     if (storedWp.length > 0) {
-      const raw = routePipe(
-        sourceX, sourceY, sourcePosition||"right",
-        targetX, targetY, targetPosition||"left",
-        storedWp
-      );
-      return raw;
+      // 사용자 조정 waypoint 사용
+      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, storedWp);
+      // 문제 3: endpoint(포트)가 이동했으면 인접 세그먼트를 직각으로 복원
+      //  → Block 이동 시 직선이 사선으로 바뀌는 것 방지
+      const reorth = reorthogonalizePath(raw, sPos, tPos);
+      return reorth;
     }
 
     if (isDragging) {
       // 빠른 휴리스틱
-      const raw = routePipe(
-        sourceX, sourceY, sourcePosition||"right",
-        targetX, targetY, targetPosition||"left",
-        []
-      );
+      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
       return avoidObstacles(raw, obstacles);
     }
 
     // A* 정밀 라우팅
-    const aStar = findPathAStar(
-      sourceX, sourceY, sourcePosition||"right",
-      targetX, targetY, targetPosition||"left",
-      obstacles
-    );
+    const aStar = findPathAStar(sourceX, sourceY, sPos, targetX, targetY, tPos, obstacles);
     if (aStar && aStar.length >= 2) {
-      // grid 결과를 정규화
-      const normalized = normalizePath(aStar);
-      // 평행 offset 적용
-      const offset = applyParallelOffset(
-        normalized, id, getEdges(), source, target
-      );
-      return offset;
+      // 1) 정규화
+      let route = normalizePath(aStar);
+      // 2) 문제 2: 산 모양 단순화 (불필요한 계단식 꺾임 제거)
+      route = simplifyPath(route, obstacles);
+      // 3) 문제 1: 끝점 수직 stub 강제 (화살표 직선 구간 확보)
+      route = enforceEndpointStubs(route, sPos, tPos);
+      // 4) 평행 offset 적용
+      route = applyParallelOffset(route, id, getEdges(), source, target);
+      // 5) 문제 2: 중간 세그먼트에 조정용 waypoint 삽입 (선택 시 핸들로 잡기 가능)
+      route = insertMidWaypoints(route);
+      return route;
     }
 
     // A* 실패 → L-shape 폴백
-    const raw = routePipe(
-      sourceX, sourceY, sourcePosition||"right",
-      targetX, targetY, targetPosition||"left",
-      []
-    );
-    return avoidObstacles(raw, obstacles);
+    const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
+    const avoided = avoidObstacles(raw, obstacles);
+    return enforceEndpointStubs(avoided, sPos, tPos);
   },[id,source,target,sourceX,sourceY,sourcePosition,
      targetX,targetY,targetPosition,storedWp,obstacles,
      isDragging,getEdges]);
@@ -3244,37 +3413,31 @@ const ITEdge = ({
   //  · 정상 → A* 정밀 라우팅
   // 모든 결과에 enforceStubs() 적용 → 끝점 수직 stub 보장
   const pts = useMemo(() => {
+    const sPos = sourcePosition || "top";
+    const tPos = targetPosition || "top";
+
     if (storedWp.length > 0) {
-      const raw = routePipe(
-        sourceX, sourceY, sourcePosition || "top",
-        targetX, targetY, targetPosition || "top",
-        storedWp
-      );
-      return enforceStubs(raw);
+      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, storedWp);
+      // 문제 3: 노드 이동 시 endpoint 직각 보정
+      const reorth = reorthogonalizePath(raw, sPos, tPos);
+      return enforceStubs(reorth);
     }
     if (isDragging) {
-      const raw = routePipe(
-        sourceX, sourceY, sourcePosition || "top",
-        targetX, targetY, targetPosition || "top",
-        []
-      );
+      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
       return enforceStubs(avoidObstacles(raw, obstacles));
     }
     // A* 정밀
-    const aStar = findPathAStar(
-      sourceX, sourceY, sourcePosition || "top",
-      targetX, targetY, targetPosition || "top",
-      obstacles
-    );
+    const aStar = findPathAStar(sourceX, sourceY, sPos, targetX, targetY, tPos, obstacles);
     if (aStar && aStar.length >= 2) {
-      return enforceStubs(normalizePath(aStar));
+      // 정규화 → 산 모양 단순화 → stub 강제 → 중간 waypoint 삽입
+      let route = normalizePath(aStar);
+      route = simplifyPath(route, obstacles);
+      route = enforceStubs(route);
+      route = insertMidWaypoints(route);
+      return route;
     }
     // 폴백
-    const raw = routePipe(
-      sourceX, sourceY, sourcePosition || "top",
-      targetX, targetY, targetPosition || "top",
-      []
-    );
+    const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
     return enforceStubs(avoidObstacles(raw, obstacles));
   }, [id, source, target, sourceX, sourceY, sourcePosition,
       targetX, targetY, targetPosition, storedWp, obstacles, isDragging]);
