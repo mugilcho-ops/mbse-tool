@@ -17,6 +17,7 @@ import ReactFlow, {
   Handle,
   Position,
   useReactFlow,
+  useStore,
   Panel,
   NodeResizer,
   EdgeLabelRenderer,
@@ -1551,7 +1552,7 @@ const GLOBAL_CSS = `
   }
   .react-flow.mbse-interface-mode .mbse-it-edge .mbse-it-edge-label {
     opacity: 1;
-    transform: translate(-50%, -50%) translate(var(--x,0), var(--y,0)) scale(1.15);
+    /* Interface 모드 라벨 강조는 opacity 만 — transform 은 inline 에서 처리 */
   }
   /* Interface 모드에서 일반 라인 (pipe) 페이드 */
   .react-flow.mbse-interface-mode .react-flow__edges > svg > g.react-flow__edge[data-id]:not(:has(.mbse-it-edge)) {
@@ -1625,6 +1626,19 @@ const GLOBAL_CSS = `
 // ─────────────────────────────────────────────────────────────
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
+
+// v10.5: 줌 레벨 → 라벨 inverse scaling 계수 계산
+// Zoom out 시 라벨이 자동으로 커지고, Zoom in 시 원래 크기로 작아짐
+//   scale = clamp(1, 1/zoom, maxScale)
+// 사용처: AreaNode 이름, IT 라인 라벨, IT 카운트 배지
+const useZoomScale = (maxScale = 2.5) => {
+  // ReactFlow store에서 현재 zoom 값 구독
+  const zoom = useStore(s => s.transform?.[2] ?? 1);
+  // zoom 이 1보다 작아질수록 scale 값 커짐, 1 이상이면 1 유지
+  const raw  = zoom > 0 ? 1 / zoom : 1;
+  return Math.min(Math.max(raw, 1), maxScale);
+};
+
 const AREA_TYPES = ["Plant","System","Package","Item"];
 const AREA_COLORS = {
   Plant:    { bg:"rgba(191,219,254,0.65)", border:"#60a5fa", label:"#1e40af" },
@@ -2109,6 +2123,14 @@ const AreaNode = memo(({ id, data, selected }) => {
   const outlets = data.autoOutlets || [];
   const hasIO   = inlets.length>0 || outlets.length>0;
 
+  // v10.5: Zoom out 시 라벨 자동 확대 (최대 2.5배)
+  // Plant 처럼 큰 글자는 너무 크지 않도록 별도 한도, Item 은 살짝 더 크게
+  const labelScale = useZoomScale(
+    data.areaType === "Plant"   ? 2.0
+    : data.areaType === "Item"  ? 2.5
+    :                              2.2  // System / Package
+  );
+
   // handles — Area도 Equipment처럼 상하좌우 기본 + 추가 가능
   const dirs   = data.handles || ["top","bottom","left","right"];
   const posMap = { top:Position.Top,bottom:Position.Bottom,left:Position.Left,right:Position.Right };
@@ -2185,7 +2207,10 @@ const AreaNode = memo(({ id, data, selected }) => {
             position:"absolute",
             top: -28,
             left: "50%",
-            transform: "translateX(-50%)",
+            // v10.5: 줌 아웃 시 IT 카운트 배지도 자동 확대 (최대 2.5배)
+            transform: `translateX(-50%) scale(${labelScale})`,
+            transformOrigin: "center bottom",
+            transition: "transform 0.15s ease-out",
             background: "#7c3aed",
             color: "#fff",
             fontSize: 11,
@@ -2230,6 +2255,11 @@ const AreaNode = memo(({ id, data, selected }) => {
                       : data.areaType==="Package" ? 15
                       : 20,  // Item
               fontWeight:800, color:c.label, lineHeight:1.2,
+              // v10.5: 줌 아웃 시 라벨 자동 확대 (좌측 상단 기준)
+              display:"inline-block",
+              transform: `scale(${labelScale})`,
+              transformOrigin: "left top",
+              transition: "transform 0.15s ease-out",
             }}>
               {/* Plant/System/Package 는 태그 미표시, Item만 표시 */}
               {data.areaType==="Item" ? `[Item] ` : ""}
@@ -3138,6 +3168,9 @@ const ITEdge = ({
   const itNo = data?.itNo || "IT-?";
   const mkId = `it_arrow_${id}`;
 
+  // v10.5: Zoom out 시 IT 라벨 자동 확대 (최대 3배 — 가장 중요한 정보라 더 크게)
+  const labelScale = useZoomScale(3.0);
+
   // ── 장애물 수집 (IT는 Area도 회피해야 함, 자기 source/target 제외) ──
   // 일반 노드(Equipment, Instrument)도 회피하여 깔끔한 여백 라우팅 보장
   const allNodes = getNodes();
@@ -3165,17 +3198,59 @@ const ITEdge = ({
   const storedWp   = data?.waypoints || [];
   const isDragging = data?._dragging === true;
 
+  // v10.5: 끝점에 수직 stub 강제 — 화살표가 핸들에 너무 붙지 않도록
+  //  - source/target 포트 방향으로 최소 IT_STUB 만큼 직선 확보
+  //  - 라인 시작·끝의 가독성 + 화살표 머리 여유 공간 보장
+  const IT_STUB = 36;   // 일반 라인(MIN_STUB=20)보다 큼 — IT 가독성 우선
+  const enforceStubs = (rawPts) => {
+    if (!rawPts || rawPts.length < 2) return rawPts;
+    const dirVec = (pos) => pos==="right" ? {dx:1,dy:0}
+                          : pos==="left"  ? {dx:-1,dy:0}
+                          : pos==="bottom"? {dx:0,dy:1}
+                          : {dx:0,dy:-1};
+    const sv = dirVec(sourcePosition || "top");
+    const tv = dirVec(targetPosition || "top");
+    const result = rawPts.map(p => ({...p}));
+
+    // ── Source stub 확보 ──
+    const sx = result[0].x, sy = result[0].y;
+    const sNext = result[1];
+    // 다음 점이 source 핸들 방향으로 IT_STUB 만큼 가지 못한 경우, stub 점 삽입
+    const sExtX = sx + sv.dx * IT_STUB;
+    const sExtY = sy + sv.dy * IT_STUB;
+    // 방향 일치 확인: 다음 점이 핸들 방향으로 진행 중이면 거리 검사
+    const sProgress = (sNext.x - sx) * sv.dx + (sNext.y - sy) * sv.dy;
+    if (sProgress < IT_STUB - 0.5) {
+      // stub 짧음 → 강제 stub 점을 두 번째 위치에 삽입
+      result.splice(1, 0, { x: sExtX, y: sExtY });
+    }
+
+    // ── Target stub 확보 ──
+    const tx = result[result.length-1].x, ty = result[result.length-1].y;
+    const tPrev = result[result.length-2];
+    const tExtX = tx + tv.dx * IT_STUB;
+    const tExtY = ty + tv.dy * IT_STUB;
+    const tProgress = (tPrev.x - tx) * tv.dx + (tPrev.y - ty) * tv.dy;
+    if (tProgress < IT_STUB - 0.5) {
+      result.splice(result.length-1, 0, { x: tExtX, y: tExtY });
+    }
+
+    return normalizePath(result);
+  };
+
   // ── 경로 계산 ─────────────────────────────────────────────
   //  · 수동 waypoints → 그대로 사용 (사용자 조정 우선)
   //  · 드래그 중 → 빠른 L-shape (avoidObstacles)
   //  · 정상 → A* 정밀 라우팅
+  // 모든 결과에 enforceStubs() 적용 → 끝점 수직 stub 보장
   const pts = useMemo(() => {
     if (storedWp.length > 0) {
-      return routePipe(
+      const raw = routePipe(
         sourceX, sourceY, sourcePosition || "top",
         targetX, targetY, targetPosition || "top",
         storedWp
       );
+      return enforceStubs(raw);
     }
     if (isDragging) {
       const raw = routePipe(
@@ -3183,7 +3258,7 @@ const ITEdge = ({
         targetX, targetY, targetPosition || "top",
         []
       );
-      return avoidObstacles(raw, obstacles);
+      return enforceStubs(avoidObstacles(raw, obstacles));
     }
     // A* 정밀
     const aStar = findPathAStar(
@@ -3192,7 +3267,7 @@ const ITEdge = ({
       obstacles
     );
     if (aStar && aStar.length >= 2) {
-      return normalizePath(aStar);
+      return enforceStubs(normalizePath(aStar));
     }
     // 폴백
     const raw = routePipe(
@@ -3200,7 +3275,7 @@ const ITEdge = ({
       targetX, targetY, targetPosition || "top",
       []
     );
-    return avoidObstacles(raw, obstacles);
+    return enforceStubs(avoidObstacles(raw, obstacles));
   }, [id, source, target, sourceX, sourceY, sourcePosition,
       targetX, targetY, targetPosition, storedWp, obstacles, isDragging]);
 
@@ -3294,25 +3369,55 @@ const ITEdge = ({
         markerStart={`url(#${mkId}_start)`}
         style={{pointerEvents:"none"}}/>
 
-      {/* ── 세그먼트 중앙 드래그 핸들 (선택 시만, stub 제외) ── */}
+      {/* ── 세그먼트 중앙 드래그 핸들 (선택 시만, stub 제외) ──
+          IT 라인 본체 클릭 → selected → 핸들 표시
+          핸들을 드래그하여 해당 세그먼트의 위치 조정 가능 */}
       {selected && segs.map((seg, i) => {
-        if (seg.len < 24) return null;
+        if (seg.len < 16) return null;
         const isStub = i === 0 || i === segs.length - 1;
         if (isStub) return null;
         const cursor = seg.isHoriz ? "ns-resize" : "ew-resize";
         return (
-          <g key={i}>
-            {/* 작은 원형 핸들 — 드래그로 라우트 조정 */}
+          <g key={i} className="mbse-it-segment-handle">
+            {/* 외부 글로우 (시각적 강조) */}
             <circle
-              cx={seg.mx} cy={seg.my} r={6}
-              fill="#fff" stroke="#7c3aed" strokeWidth={2.5}
-              style={{ cursor, pointerEvents:"all" }}
+              cx={seg.mx} cy={seg.my} r={11}
+              fill="#7c3aed" opacity={0.15}
+              style={{ pointerEvents:"none" }}
+            />
+            {/* 메인 핸들 — 드래그로 라우트 조정 */}
+            <circle
+              cx={seg.mx} cy={seg.my} r={7}
+              fill="#fff" stroke="#7c3aed" strokeWidth={3}
+              style={{ cursor, pointerEvents:"all",
+                       filter:"drop-shadow(0 1px 2px rgba(0,0,0,0.2))" }}
               onMouseDown={ev => onSegDrag(ev, i)}
             />
+            {/* 중앙 점 (방향 인디케이터) */}
             <circle
-              cx={seg.mx} cy={seg.my} r={2.5}
+              cx={seg.mx} cy={seg.my} r={3}
               fill="#7c3aed" style={{ pointerEvents:"none" }}
             />
+            {/* 방향 화살표 (가로면 위아래, 세로면 좌우) */}
+            {seg.isHoriz ? (
+              <>
+                <path d={`M ${seg.mx-4} ${seg.my-9} L ${seg.mx} ${seg.my-12} L ${seg.mx+4} ${seg.my-9}`}
+                  fill="none" stroke="#7c3aed" strokeWidth={1.5} strokeLinecap="round"
+                  style={{ pointerEvents:"none" }}/>
+                <path d={`M ${seg.mx-4} ${seg.my+9} L ${seg.mx} ${seg.my+12} L ${seg.mx+4} ${seg.my+9}`}
+                  fill="none" stroke="#7c3aed" strokeWidth={1.5} strokeLinecap="round"
+                  style={{ pointerEvents:"none" }}/>
+              </>
+            ) : (
+              <>
+                <path d={`M ${seg.mx-9} ${seg.my-4} L ${seg.mx-12} ${seg.my} L ${seg.mx-9} ${seg.my+4}`}
+                  fill="none" stroke="#7c3aed" strokeWidth={1.5} strokeLinecap="round"
+                  style={{ pointerEvents:"none" }}/>
+                <path d={`M ${seg.mx+9} ${seg.my-4} L ${seg.mx+12} ${seg.my} L ${seg.mx+9} ${seg.my+4}`}
+                  fill="none" stroke="#7c3aed" strokeWidth={1.5} strokeLinecap="round"
+                  style={{ pointerEvents:"none" }}/>
+              </>
+            )}
           </g>
         );
       })}
@@ -3323,7 +3428,10 @@ const ITEdge = ({
           className="mbse-it-edge-label"
           style={{
             position:"absolute",
-            transform:`translate(-50%,-50%) translate(${longest.mx}px,${longest.my}px)`,
+            // v10.5: 줌 아웃 시 자동 확대 (최대 3배). Interface 모드 CSS 의 1.15x 와는 별개로 곱해짐
+            transform:`translate(-50%,-50%) translate(${longest.mx}px,${longest.my}px) scale(${labelScale})`,
+            transformOrigin:"center center",
+            transition: "transform 0.15s ease-out",
             background:"#7c3aed",
             color:"#fff",
             padding:"2px 8px",
@@ -3344,7 +3452,7 @@ const ITEdge = ({
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent("mbse:open-it-modal", { detail:{ id } }));
           }}
-          title={`${itNo} — 체크리스트 ${done}/${total} 작성됨 (선택 후 라인 중간 핸들을 끌어 라우트 조정 가능)`}
+          title={`${itNo} — 체크리스트 ${done}/${total} 작성됨\n• 라벨 클릭: Definition + Check List 모달 열기\n• 라인 본체 클릭: 선택 → 라우트 조정 핸들 표시`}
         >
           🔗 {itNo}
         </div>
@@ -5589,9 +5697,10 @@ const CanvasInner = () => {
   }, [nodes, setEdges]);
 
   const onNodeClick=useCallback((_,n)=>setSel(n),[]);
+  // v10.5: IT 라인 본체 클릭 → 선택 상태(라우트 조정 모드)
+  //        IT 라벨(🔗 IT-N) 클릭 → 모달 (라벨 onClick 에서 dispatch)
   const onEdgeClick=useCallback((_,e)=>{
     setSel(e);
-    if (e.type === "itEdge") setItModalEdgeId(e.id);
   },[]);
   const onPaneClick=useCallback(()=>setSel(null),[]);
 
