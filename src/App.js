@@ -1517,6 +1517,61 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
 // GLOBAL CSS
 // ─────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
+  /* ─────────────────────────────────────────────
+     IT (Interface Tie-in) 라인 — 평소 & 모드별 가시성
+     ───────────────────────────────────────────── */
+  /* 평소 — 얇고 흐리게 (P&ID 작업 화면 가리지 않도록) */
+  .mbse-it-edge .mbse-it-edge-path {
+    opacity: 0.4;
+    transition: opacity 0.25s ease, stroke-width 0.25s ease;
+  }
+  .mbse-it-edge .mbse-it-edge-label {
+    opacity: 0.6;
+    transform-origin: center center;
+    transition: opacity 0.25s ease, transform 0.25s ease;
+  }
+  /* 선택됐을 때 — 진한 강조 */
+  .mbse-it-edge[data-selected="1"] .mbse-it-edge-path {
+    opacity: 1;
+  }
+  .mbse-it-edge[data-selected="1"] .mbse-it-edge-label {
+    opacity: 1;
+  }
+  .mbse-it-edge:hover .mbse-it-edge-path {
+    opacity: 0.9;
+  }
+  .mbse-it-edge:hover .mbse-it-edge-label {
+    opacity: 1;
+  }
+
+  /* Interface 모드 — IT 라인 강조, 다른 라인 페이드 */
+  .react-flow.mbse-interface-mode .mbse-it-edge .mbse-it-edge-path {
+    opacity: 1;
+    stroke-width: 3.5px;
+  }
+  .react-flow.mbse-interface-mode .mbse-it-edge .mbse-it-edge-label {
+    opacity: 1;
+    transform: translate(-50%, -50%) translate(var(--x,0), var(--y,0)) scale(1.15);
+  }
+  /* Interface 모드에서 일반 라인 (pipe) 페이드 */
+  .react-flow.mbse-interface-mode .react-flow__edges > svg > g.react-flow__edge[data-id]:not(:has(.mbse-it-edge)) {
+    opacity: 0.12;
+  }
+  /* :has() 미지원 브라우저 fallback: edge 자체에 opacity */
+  .react-flow.mbse-interface-mode .react-flow__edge {
+    opacity: 0.12;
+  }
+  .react-flow.mbse-interface-mode .react-flow__edge:has(.mbse-it-edge),
+  .react-flow.mbse-interface-mode .react-flow__edge.has-it-edge {
+    opacity: 1;
+  }
+  /* 노드도 약간 톤다운 */
+  .react-flow.mbse-interface-mode .react-flow__node-equipment,
+  .react-flow.mbse-interface-mode .react-flow__node-instrument,
+  .react-flow.mbse-interface-mode .react-flow__node-brench {
+    opacity: 0.55;
+  }
+
   /* ── 포트 핸들: 기본 숨김, hover/선택 시 표시 ── */
   .react-flow__handle {
     width: 10px !important;
@@ -2092,31 +2147,66 @@ const AreaNode = memo(({ id, data, selected }) => {
         <Handle key={pid} type="source" position={posMap[dir]} id={pid} style={getHStyle(dir,pct)}/>
       ))}
 
-      {/* ── IT 전용 포트 4개 (상부 좌/우, 하부 좌/우) ──
+      {/* ── IT 전용 포트 2개 (상단 중앙, 하단 중앙) ──
           보라색 다이아몬드 모양으로 일반 포트와 시각적 차별화
-          ID 에 "it_" prefix → onConnect 에서 IT 라인으로 식별 */}
+          ID에 "it_" prefix → onConnect 에서 IT 라인으로 식별 */}
       {[
-        { id:"it_tl", pos:Position.Top,    side:"top",    left:"15%" },
-        { id:"it_tr", pos:Position.Top,    side:"top",    left:"85%" },
-        { id:"it_bl", pos:Position.Bottom, side:"bottom", left:"15%" },
-        { id:"it_br", pos:Position.Bottom, side:"bottom", left:"85%" },
+        { id:"it_top",    pos:Position.Top,    side:"top"    },
+        { id:"it_bottom", pos:Position.Bottom, side:"bottom" },
       ].map(p => (
         <Handle key={p.id} type="source" position={p.pos} id={p.id}
           style={{
-            width: 12, height: 12,
+            width: 14, height: 14,
             background: "#7c3aed",
             border: "2px solid #fff",
             borderRadius: 2,
             transform: `translateX(-50%) rotate(45deg)`,
-            left: p.left,
-            boxShadow: "0 0 0 1px #7c3aed, 0 2px 4px rgba(124,58,237,0.4)",
+            left: "50%",
+            boxShadow: "0 0 0 1px #7c3aed, 0 2px 6px rgba(124,58,237,0.45)",
             zIndex: 25,
-            ...(p.side === "top"    ? { top:    -7 } : {}),
-            ...(p.side === "bottom" ? { bottom: -7 } : {}),
+            ...(p.side === "top"    ? { top:    -8 } : {}),
+            ...(p.side === "bottom" ? { bottom: -8 } : {}),
           }}
-          title="IT Line 전용 포트"
+          title="IT Line 전용 포트 (Interface Tie-in)"
         />
       ))}
+
+      {/* ── IT 카운트 배지 (상단 중앙, 포트 위쪽) ──
+          해당 Area에 연결된 IT 라인 수를 표시
+          클릭 시 해당 Area의 IT 목록 팝업
+          data.itCount는 App에서 edges 변경 시 자동 주입됨 */}
+      {(data.itCount > 0) && (
+        <div
+          onClick={e => {
+            e.stopPropagation();
+            window.dispatchEvent(new CustomEvent("mbse:open-it-list", { detail:{ areaId: id }}));
+          }}
+          style={{
+            position:"absolute",
+            top: -28,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#7c3aed",
+            color: "#fff",
+            fontSize: 11,
+            fontWeight: 800,
+            padding: "3px 10px",
+            borderRadius: 14,
+            border: "2px solid #fff",
+            boxShadow: "0 2px 6px rgba(124,58,237,0.4)",
+            cursor: "pointer",
+            zIndex: 30,
+            whiteSpace: "nowrap",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            userSelect: "none",
+          }}
+          title={`이 Area의 IT 라인 ${data.itCount}개`}
+        >
+          🔗 {data.itCount}
+        </div>
+      )}
 
       {/* Title bar */}
       <div onDoubleClick={startEdit} style={{
@@ -3044,15 +3134,11 @@ const ITEdge = ({
   targetX, targetY, targetPosition,
   source, target, data, selected,
 }) => {
-  const stroke    = selected ? "#f59e0b" : "#7c3aed";
-  const sw        = selected ? 4 : 3;
-  const mkId      = `it_arrow_${id}`;
+  const itNo = data?.itNo || "IT-?";
+  const mkId = `it_arrow_${id}`;
 
-  const itNo      = data?.itNo || "IT-?";
-
-  // ── 라운드 곡선 라우팅 (Cubic Bezier) ─────────────────────
-  // 다른 직각 라인들과 명확히 구분되도록 부드러운 곡선으로 연결
-  // 핸들에서 직선으로 짧게 빠져나온 뒤, 베지어 곡선으로 자연스럽게 연결
+  // ── 직각 (Manhattan) 라우팅 ─────────────────────────────
+  // 베지어 산만함 제거 — 다른 라인과 일관된 시각 언어, 깔끔한 평행 표현
   const dir = (pos) => pos === "right" ? {dx:1,dy:0}
                      : pos === "left"  ? {dx:-1,dy:0}
                      : pos === "bottom"? {dx:0,dy:1}
@@ -3060,79 +3146,130 @@ const ITEdge = ({
   const sv = dir(sourcePosition);
   const tv = dir(targetPosition);
 
-  // 두 점 사이 거리에 비례한 곡률 강도
-  // 거리가 길수록 제어점도 멀리 → 자연스러운 S-curve 또는 U-curve
-  const dist = Math.hypot(targetX - sourceX, targetY - sourceY);
-  const curveStrength = Math.max(60, Math.min(dist * 0.45, 220));
+  // 핸들에서 살짝 빠져나온 stub, 그 다음 중간 분기점을 거쳐 다시 stub
+  const STUB = 25;
+  const sx2 = sourceX + sv.dx*STUB, sy2 = sourceY + sv.dy*STUB;
+  const tx2 = targetX + tv.dx*STUB, ty2 = targetY + tv.dy*STUB;
 
-  // 제어점: 각 끝점에서 핸들 방향으로 curveStrength만큼 떨어진 점
-  const cp1x = sourceX + sv.dx * curveStrength;
-  const cp1y = sourceY + sv.dy * curveStrength;
-  const cp2x = targetX + tv.dx * curveStrength;
-  const cp2y = targetY + tv.dy * curveStrength;
+  // 라우팅 결정 (4가지 케이스)
+  let pts;
+  if (sv.dy===0 && tv.dy===0) {
+    // 좌↔우 또는 우↔좌 (수평 출발/도착): 중간에 X 분기
+    const mx = (sx2+tx2)/2;
+    pts = [
+      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
+      {x:mx,y:sy2},{x:mx,y:ty2},
+      {x:tx2,y:ty2},{x:targetX,y:targetY},
+    ];
+  } else if (sv.dx===0 && tv.dx===0) {
+    // 위↔아래 (수직 출발/도착): 중간에 Y 분기 — 가장 흔한 케이스 (상단/하단 포트 간)
+    const my = (sy2+ty2)/2;
+    pts = [
+      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
+      {x:sx2,y:my},{x:tx2,y:my},
+      {x:tx2,y:ty2},{x:targetX,y:targetY},
+    ];
+  } else if (sv.dy===0) {
+    pts = [
+      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
+      {x:tx2,y:sy2},{x:tx2,y:ty2},
+      {x:targetX,y:targetY},
+    ];
+  } else {
+    pts = [
+      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
+      {x:sx2,y:ty2},{x:tx2,y:ty2},
+      {x:targetX,y:targetY},
+    ];
+  }
 
-  // 짧은 핸들 stub (5~8px) 후 곡선 시작 — 화살표 자연 정렬용
-  const stubLen = 6;
-  const sStubX = sourceX + sv.dx * stubLen;
-  const sStubY = sourceY + sv.dy * stubLen;
-  const tStubX = targetX + tv.dx * stubLen;
-  const tStubY = targetY + tv.dy * stubLen;
+  // path 생성 (rounded corners)
+  let dPath = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i=1; i<pts.length; i++) {
+    const p=pts[i-1], q=pts[i], n=pts[i+1];
+    if (!n) { dPath += ` L ${q.x} ${q.y}`; }
+    else {
+      const dx1=q.x-p.x, dy1=q.y-p.y, dx2=n.x-q.x, dy2=n.y-q.y;
+      const l1=Math.hypot(dx1,dy1)||1, l2=Math.hypot(dx2,dy2)||1;
+      const r=Math.min(10, l1/2, l2/2);
+      dPath += ` L ${q.x-(dx1/l1)*r} ${q.y-(dy1/l1)*r}`;
+      dPath += ` Q ${q.x} ${q.y} ${q.x+(dx2/l2)*r} ${q.y+(dy2/l2)*r}`;
+    }
+  }
 
-  const dPath =
-    `M ${sourceX} ${sourceY} ` +
-    `L ${sStubX} ${sStubY} ` +
-    `C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${tStubX} ${tStubY} ` +
-    `L ${targetX} ${targetY}`;
+  // 라벨 위치: 가장 긴 세그먼트 중앙
+  let longest = {mx:0,my:0,len:0};
+  for (let i=0; i<pts.length-1; i++) {
+    const len = Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].y-pts[i].y);
+    if (len > longest.len) {
+      longest = { mx:(pts[i].x+pts[i+1].x)/2, my:(pts[i].y+pts[i+1].y)/2, len };
+    }
+  }
 
-  // 라벨 위치: 베지어 곡선의 중간점 (t=0.5)
-  // B(0.5) = 0.125*P0 + 0.375*P1 + 0.375*P2 + 0.125*P3
-  const labelX = 0.125 * sStubX + 0.375 * cp1x + 0.375 * cp2x + 0.125 * tStubX;
-  const labelY = 0.125 * sStubY + 0.375 * cp1y + 0.375 * cp2y + 0.125 * tStubY;
+  // 체크리스트 진척 상태 색상 (라벨용)
+  // 5개 카테고리 중 content 채워진 비율
+  const cl = data?.checklist || {};
+  const total = Object.keys(cl).length || 5;
+  const done  = Object.values(cl).filter(c => (c?.content||"").trim()).length;
+  const pct   = total > 0 ? done/total : 0;
+  const statusColor = pct === 1 ? "#16a34a"    // 완료 = 초록
+                    : pct > 0    ? "#f59e0b"    // 진행 = 오렌지
+                    : "#94a3b8";                // 미작성 = 회색
+
+  // ── stroke: 평소엔 얇고 흐림, 선택/Interface 모드 시 진함 ──
+  // 실제 모드별 가시성은 .mbse-it-edge CSS 클래스로 처리 (App에서 토글)
+  const stroke = selected ? "#f59e0b" : "#7c3aed";
+  const sw     = selected ? 3.5 : 2;
 
   return (
-    <g>
+    <g className="mbse-it-edge" data-it-id={id} data-selected={selected ? "1" : "0"}>
       <defs>
-        <marker id={mkId} markerWidth={10} markerHeight={8}
-          refX={9} refY={4} orient="auto" markerUnits="userSpaceOnUse">
-          <polygon points="0,0 10,4 0,8" fill={stroke}/>
+        <marker id={mkId} markerWidth={9} markerHeight={7}
+          refX={8} refY={3.5} orient="auto" markerUnits="userSpaceOnUse">
+          <polygon points="0,0 9,3.5 0,7" fill={stroke}/>
         </marker>
-        <marker id={`${mkId}_start`} markerWidth={10} markerHeight={8}
-          refX={1} refY={4} orient="auto-start-reverse" markerUnits="userSpaceOnUse">
-          <polygon points="0,0 10,4 0,8" fill={stroke}/>
+        <marker id={`${mkId}_start`} markerWidth={9} markerHeight={7}
+          refX={1} refY={3.5} orient="auto-start-reverse" markerUnits="userSpaceOnUse">
+          <polygon points="0,0 9,3.5 0,7" fill={stroke}/>
         </marker>
       </defs>
       {/* 히트 영역 */}
       <path d={dPath} fill="none" stroke="transparent" strokeWidth={20} style={{cursor:"pointer"}}/>
       {/* 실제 라인 */}
-      <path d={dPath} fill="none"
+      <path className="mbse-it-edge-path" d={dPath} fill="none"
         stroke={stroke} strokeWidth={sw}
-        strokeDasharray="8 4"
+        strokeDasharray="6 4"
         markerEnd={`url(#${mkId})`}
         markerStart={`url(#${mkId}_start)`}
         style={{pointerEvents:"none"}}/>
       {/* IT-N 라벨 (클릭 시 모달 열림) */}
       <EdgeLabelRenderer>
         <div
+          className="mbse-it-edge-label"
           style={{
             position:"absolute",
-            transform:`translate(-50%,-50%) translate(${labelX}px,${labelY}px)`,
+            transform:`translate(-50%,-50%) translate(${longest.mx}px,${longest.my}px)`,
             background:"#7c3aed",
             color:"#fff",
-            padding:"3px 10px",
-            borderRadius:14,
-            fontSize:12,
+            padding:"2px 8px",
+            borderRadius:10,
+            fontSize:10.5,
             fontWeight:700,
             fontFamily:"monospace",
-            border:"2px solid #fff",
-            boxShadow:"0 2px 6px rgba(0,0,0,0.25)",
+            border:`2px solid ${statusColor}`,
+            boxShadow:"0 2px 5px rgba(124,58,237,0.3)",
             cursor:"pointer",
             pointerEvents:"all",
             whiteSpace:"nowrap",
+            display:"flex",
+            alignItems:"center",
+            gap:4,
           }}
           onClick={(e) => {
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent("mbse:open-it-modal", { detail:{ id } }));
           }}
+          title={`${itNo} — 체크리스트 ${done}/${total} 작성됨`}
         >
           🔗 {itNo}
         </div>
@@ -4684,6 +4821,10 @@ const CanvasInner = () => {
   const [canBeIT, setCanBeIT] = useState(false);
   // v10.3: IT Line modal — 클릭한 IT edge id
   const [itModalEdgeId, setItModalEdgeId] = useState(null);
+  // v10.3+: Interface 모드 토글 — IT 라인 강조, 다른 라인 페이드
+  const [interfaceMode, setInterfaceMode] = useState(false);
+  // v10.3+: 특정 Area의 IT 목록 팝업
+  const [itListAreaId, setItListAreaId] = useState(null);
   const [guides,setGuides] = useState([]);
   const [showSpecImport, setShowSpecImport] = useState(false); // Smart Guide 가상선
   const connRef     = useRef(null);
@@ -4845,12 +4986,41 @@ const CanvasInner = () => {
       if (id) setItModalEdgeId(id);
     };
     window.addEventListener("mbse:open-it-modal", openIT);
+    // v10.3+: Area 의 IT 카운트 배지 클릭 시 목록 팝업 열기
+    const openITList = (ev) => {
+      const areaId = ev.detail?.areaId;
+      if (areaId) setItListAreaId(areaId);
+    };
+    window.addEventListener("mbse:open-it-list", openITList);
     return()=>{
       window.removeEventListener("mbse:updatelabel",fn);
       window.removeEventListener("mbse:updatewaypoint",fn);
       window.removeEventListener("mbse:open-it-modal", openIT);
+      window.removeEventListener("mbse:open-it-list", openITList);
     };
   },[setNodes,setEdges]);
+
+  // v10.3+: edges 변경 시 각 Area 노드의 itCount 자동 주입 ──────
+  // (AreaNode가 직접 edges를 못 보므로 data 에 카운트를 채워줌)
+  useEffect(() => {
+    const itEdges = edges.filter(e => e.type === "itEdge");
+    if (itEdges.length === 0) {
+      // 모든 area 의 itCount 가 이미 0이면 패스
+      const hasAny = nodes.some(n => n.type === "area" && (n.data?.itCount||0) > 0);
+      if (!hasAny) return;
+    }
+    const counts = {};
+    itEdges.forEach(e => {
+      counts[e.source] = (counts[e.source]||0) + 1;
+      counts[e.target] = (counts[e.target]||0) + 1;
+    });
+    setNodes(ns => ns.map(n => {
+      if (n.type !== "area") return n;
+      const next = counts[n.id] || 0;
+      if ((n.data?.itCount||0) === next) return n;
+      return { ...n, data: { ...n.data, itCount: next } };
+    }));
+  }, [edges]); // eslint-disable-line
 
   // DRAG
   const onDragStart=useCallback((e,cat,sub)=>{ e.dataTransfer.setData("mbse/cat",cat); e.dataTransfer.setData("mbse/sub",sub); e.dataTransfer.effectAllowed="move"; },[]);
@@ -5346,6 +5516,24 @@ const CanvasInner = () => {
           {/* 구분선 */}
           <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
 
+          {/* v10.3+: Interface 모드 토글 — IT 라인 강조 / 다른 라인 페이드 */}
+          <button onClick={()=>setInterfaceMode(v=>!v)}
+            style={{
+              background: interfaceMode ? "#7c3aed" : "#1e293b",
+              color: interfaceMode ? "#fff" : "#c4b5fd",
+              border: `1px solid ${interfaceMode ? "#a78bfa" : "#475569"}`,
+              borderRadius:5, padding:"3px 12px", cursor:"pointer",
+              fontSize:11, fontWeight:700,
+              transition: "all 0.15s ease",
+            }}
+            title="Interface 모드: IT 라인만 선명하게, 다른 라인은 페이드"
+          >
+            🔗 Interface 모드 {interfaceMode && "ON"}
+          </button>
+
+          {/* 구분선 */}
+          <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
+
           {/* 📋 History Log 버튼 */}
           <button onClick={()=>setShowLog(v=>!v)}
             style={{ background: showLog?"#0f172a":"#1e293b", color: showLog?"#fbbf24":"#94a3b8", border:`1px solid ${showLog?"#fbbf24":"#334155"}`, borderRadius:5, padding:"3px 10px", cursor:"pointer", fontSize:11 }}>
@@ -5362,6 +5550,7 @@ const CanvasInner = () => {
         <div style={{ flex:1,display:"flex",minHeight:0 }}>
           <div ref={wrapRef} style={{ flex:1,minWidth:0 }} onDragOver={onDragOver} onDrop={onDrop}>
             <ReactFlow
+              className={interfaceMode ? "mbse-interface-mode" : ""}
               nodes={nodes} edges={edges}
               onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
               onConnect={onConnect}
@@ -5524,6 +5713,109 @@ const CanvasInner = () => {
               setTimeout(()=>setSaveMsg(""), 2500);
             }}
           />
+        );
+      })()}
+
+      {/* v10.3+: 특정 Area의 IT 목록 팝업 (배지 클릭 시 표시) */}
+      {itListAreaId && (() => {
+        const area = nodes.find(n => n.id === itListAreaId);
+        if (!area) return null;
+        const list = edges
+          .filter(e => e.type === "itEdge" && (e.source === itListAreaId || e.target === itListAreaId))
+          .map(e => {
+            const otherId = e.source === itListAreaId ? e.target : e.source;
+            const otherNode = nodes.find(n => n.id === otherId);
+            return { edge: e, otherName: otherNode?.data?.label || otherId };
+          });
+        return (
+          <div
+            onClick={() => setItListAreaId(null)}
+            style={{
+              position:"fixed", inset:0, background:"rgba(15,23,42,0.5)",
+              zIndex:999, display:"flex", alignItems:"center", justifyContent:"center",
+            }}
+          >
+            <div
+              onClick={e => e.stopPropagation()}
+              style={{
+                width:480, maxHeight:"75vh", background:"#fff", borderRadius:10,
+                boxShadow:"0 20px 50px rgba(0,0,0,0.3)", overflow:"hidden",
+                display:"flex", flexDirection:"column",
+              }}
+            >
+              <div style={{
+                padding:"12px 18px", background:"#7c3aed", color:"#fff",
+                display:"flex", alignItems:"center", justifyContent:"space-between",
+              }}>
+                <div>
+                  <div style={{ fontSize:11, opacity:0.85 }}>{area.data?.areaType || "Area"}</div>
+                  <div style={{ fontSize:15, fontWeight:800 }}>
+                    🔗 {area.data?.label || area.id} — IT Line {list.length}개
+                  </div>
+                </div>
+                <button onClick={() => setItListAreaId(null)} style={{
+                  background:"rgba(255,255,255,0.25)", border:"none", color:"#fff",
+                  padding:"4px 10px", borderRadius:5, cursor:"pointer", fontSize:11, fontWeight:700,
+                }}>✕</button>
+              </div>
+              <div style={{ flex:1, overflowY:"auto", padding:"6px 0" }}>
+                {list.length === 0 ? (
+                  <div style={{ padding:30, textAlign:"center", color:"#94a3b8", fontSize:12 }}>
+                    이 Area에 연결된 IT Line이 없습니다.
+                  </div>
+                ) : list.map(({edge, otherName}) => {
+                  const cl = edge.data?.checklist || {};
+                  const total = Object.keys(cl).length || 5;
+                  const done = Object.values(cl).filter(c => (c?.content||"").trim()).length;
+                  const pct = total > 0 ? done/total : 0;
+                  const statusColor = pct === 1 ? "#16a34a" : pct > 0 ? "#f59e0b" : "#94a3b8";
+                  return (
+                    <div key={edge.id}
+                      onClick={() => { setItListAreaId(null); setItModalEdgeId(edge.id); }}
+                      style={{
+                        padding:"10px 18px", cursor:"pointer", borderBottom:"1px solid #f1f5f9",
+                        display:"flex", alignItems:"center", gap:10,
+                        transition: "background 0.1s ease",
+                      }}
+                      onMouseEnter={e=>e.currentTarget.style.background="#f8fafc"}
+                      onMouseLeave={e=>e.currentTarget.style.background=""}
+                    >
+                      <div style={{
+                        background:"#7c3aed", color:"#fff", padding:"3px 9px",
+                        borderRadius:10, fontSize:11, fontWeight:800, fontFamily:"monospace",
+                        border:`2px solid ${statusColor}`,
+                        whiteSpace:"nowrap",
+                      }}>
+                        {edge.data?.itNo || "IT-?"}
+                      </div>
+                      <div style={{ flex:1, fontSize:12, color:"#1e293b" }}>
+                        <div style={{ fontWeight:700 }}>↔ {otherName}</div>
+                        {(edge.data?.influenceFactors||[]).filter(f=>f.trim()).length > 0 && (
+                          <div style={{ fontSize:10.5, color:"#64748b", marginTop:2 }}>
+                            영향: {(edge.data.influenceFactors).filter(f=>f.trim()).join(" · ").slice(0,60)}
+                            {(edge.data.influenceFactors).filter(f=>f.trim()).join(" · ").length>60 ? "…":""}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{
+                        fontSize:10, color: statusColor, fontWeight:700,
+                        background: statusColor+"15", padding:"2px 8px", borderRadius:4,
+                        whiteSpace:"nowrap",
+                      }}>
+                        {done}/{total}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{
+                padding:"8px 18px", borderTop:"1px solid #e2e8f0",
+                background:"#f8fafc", fontSize:11, color:"#64748b", textAlign:"center",
+              }}>
+                항목을 클릭하면 상세 편집 화면이 열립니다
+              </div>
+            </div>
+          </div>
         );
       })()}
 
