@@ -2710,12 +2710,47 @@ const normalizePath = pts => {
   return m;
 };
 
+// ── 직각 강제 분해 (v10.8) ─────────────────────────────────
+// 사선 세그먼트를 발견하면 중간점을 삽입해 L자로 분해
+// → "모든 라인은 직각" 원칙을 어떤 경우에도 보장
+//   (노드 이동·waypoint 조작 후 생기는 사선을 자동 복원)
+// 끝점 인접 세그먼트는 포트 방향에 맞춰 분해 (자연스러운 진입/이탈)
+const rectifyOrthogonal = (pts, srcPos, tgtPos) => {
+  if (!pts || pts.length < 2) return pts || [];
+  const sv = portVec(srcPos || "right");
+  const tv = portVec(tgtPos || "left");
+  const out = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const a = out[out.length - 1], b = pts[i];
+    const dx = Math.abs(b.x - a.x), dy = Math.abs(b.y - a.y);
+    if (dx > 0.5 && dy > 0.5) {
+      // 사선 발견 → L자 분해
+      const isFirst = out.length === 1;            // source 포트 직후
+      const isLast  = i === pts.length - 1;        // target 포트 직전
+      if (isFirst) {
+        // source 포트 방향 우선: 수평 포트면 수평 먼저, 수직 포트면 수직 먼저
+        if (sv.dx !== 0) out.push({ x: b.x, y: a.y });
+        else             out.push({ x: a.x, y: b.y });
+      } else if (isLast) {
+        // target 진입이 포트 방향과 일치하도록: 수평 포트면 마지막이 수평
+        if (tv.dx !== 0) out.push({ x: a.x, y: b.y });
+        else             out.push({ x: b.x, y: a.y });
+      } else {
+        out.push({ x: b.x, y: a.y }); // 중간: 수평 먼저 (일관성)
+      }
+    }
+    out.push(b);
+  }
+  return normalizePath(out);
+};
+
 // ── 1 + 2번 요건: 기본 라우팅 + 모든 세그먼트에 중앙 waypoint ─
 // MIN_STUB로 포트에서 직선 이탈 후 꺾임, 각 세그먼트 중앙에 wp 자동 삽입
 const routePipe = (sx,sy,srcPos,tx,ty,tgtPos,storedWp) => {
-  // 수동 waypoints 있으면 정규화만
+  // 수동 waypoints 있으면 직각 강제 분해 + 정규화
+  // (노드 이동으로 생긴 사선을 자동으로 L자 복원 → 직각 원칙 유지)
   if (storedWp&&storedWp.length>0)
-    return normalizePath([{x:sx,y:sy},...storedWp,{x:tx,y:ty}]);
+    return rectifyOrthogonal([{x:sx,y:sy},...storedWp,{x:tx,y:ty}], srcPos, tgtPos);
 
   const sv=portVec(srcPos), tv=portVec(tgtPos);
   const stub = MIN_STUB; // 고정 최소 stub
@@ -3204,26 +3239,49 @@ const PipeEdge = ({
   const icdNo       = data?.icd_no||"";        // v10 ICD 번호
   const icdStatus   = data?.icd_status||"";    // v10 ICD 상태
 
-  // 장애물 수집 (Area 제외, source/target 제외)
-  // bbox에 PADDING 추가, 실제 렌더된 노드 크기 사용
+  // 장애물 수집 (v10.8: 무관한 Area도 장애물로 포함)
+  //  - source/target 노드 제외
+  //  - source/target이 "속해 있는" Area(조상 포함)는 통과 허용
+  //  - 그 외 Area는 관통 금지 → 라인이 무관 Area를 피해 라우팅됨
   const allNodesSnapshot = getNodes();
-  const obstacles = useMemo(()=>
-    allNodesSnapshot
-      .filter(n=>n.id!==source&&n.id!==target&&n.type!=="area")
-      .map(n=>{
-        const x = n.position?.x||0;
-        const y = n.position?.y||0;
-        // 실제 측정값 우선: measured > width > style.width > 기본
-        const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
-        const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
-        return {
-          x1: x - PADDING,
-          y1: y - PADDING,
-          x2: x + w + PADDING,
-          y2: y + h + PADDING,
-        };
+  const obstacles = useMemo(()=>{
+    const getBox = (n) => {
+      const x = n.position?.x||0, y = n.position?.y||0;
+      const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
+      const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
+      return { x, y, w, h };
+    };
+    const srcNode = allNodesSnapshot.find(n=>n.id===source);
+    const tgtNode = allNodesSnapshot.find(n=>n.id===target);
+    // 노드 중심이 Area bbox 안에 있는지 (소속 판정)
+    const centerInside = (node, areaBox) => {
+      if (!node) return false;
+      const nb = getBox(node);
+      const cx = nb.x + nb.w/2, cy = nb.y + nb.h/2;
+      return cx >= areaBox.x && cx <= areaBox.x + areaBox.w
+          && cy >= areaBox.y && cy <= areaBox.y + areaBox.h;
+    };
+    return allNodesSnapshot
+      .filter(n=>{
+        if (n.id===source || n.id===target) return false;
+        if (n.type==="area") {
+          const ab = getBox(n);
+          // start/end가 속한 Area(중첩 조상 포함)는 장애물에서 제외
+          if (centerInside(srcNode, ab) || centerInside(tgtNode, ab)) return false;
+          return true; // 무관한 Area → 관통 금지
+        }
+        return true;
       })
-  ,[source, target,
+      .map(n=>{
+        const b = getBox(n);
+        return {
+          x1: b.x - PADDING,
+          y1: b.y - PADDING,
+          x2: b.x + b.w + PADDING,
+          y2: b.y + b.h + PADDING,
+        };
+      });
+  },[source, target,
     // 모든 비-source/target 노드 위치를 의존성에 포함 → 노드 이동 시 재계산
     allNodesSnapshot.map(n => `${n.id}:${n.position?.x},${n.position?.y}:${n.measured?.width||n.width||0}x${n.measured?.height||n.height||0}`).join("|"),
   ]);
@@ -3288,9 +3346,10 @@ const PipeEdge = ({
     const svg=e.target.closest("svg");if(!svg)return;
     const seg=segs[segIdx];
     const origPos=toSVG(svg,e);
-    const initWps=storedWp.length>0
-      ?storedWp.map(p=>({...p}))
-      :pts.slice(1,-1).map(p=>({...p}));
+    // v10.8: 항상 "현재 렌더된 경로(pts)" 기준으로 드래그
+    // storedWp 기준이면 normalize/rectify로 점 개수가 달라져
+    // 세그먼트↔waypoint 인덱스가 어긋나 사선이 생기던 버그 수정
+    const initWps=pts.slice(1,-1).map(p=>({...p}));
 
     const onMove=mv=>{
       const cur=toSVG(svg,mv);
@@ -3488,24 +3547,45 @@ const ITEdge = ({
   // v10.5: Zoom out 시 IT 라벨 자동 확대 (최대 3배 — 가장 중요한 정보라 더 크게)
   const labelScale = useZoomScale(3.0);
 
-  // ── 장애물 수집 (IT는 Area도 회피해야 함, 자기 source/target 제외) ──
+  // ── 장애물 수집 (IT는 Area도 회피, 자기 source/target + 조상 Area 제외) ──
   // 일반 노드(Equipment, Instrument)도 회피하여 깔끔한 여백 라우팅 보장
   const allNodes = getNodes();
   const obstacles = useMemo(() => {
+    const getBox = (n) => {
+      const x = n.position?.x||0, y = n.position?.y||0;
+      const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
+      const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
+      return { x, y, w, h };
+    };
+    const srcNode = allNodes.find(n=>n.id===source);
+    const tgtNode = allNodes.find(n=>n.id===target);
+    const centerInside = (node, areaBox) => {
+      if (!node) return false;
+      const nb = getBox(node);
+      const cx = nb.x + nb.w/2, cy = nb.y + nb.h/2;
+      return cx >= areaBox.x && cx <= areaBox.x + areaBox.w
+          && cy >= areaBox.y && cy <= areaBox.y + areaBox.h;
+    };
     return allNodes
-      .filter(n => n.id !== source && n.id !== target)
+      .filter(n => {
+        if (n.id === source || n.id === target) return false;
+        // v10.8: source/target Area를 감싸는 조상 Area는 제외
+        // (Plant 안의 두 Package 연결 시 Plant가 장애물이 되어 거대 우회하는 문제 방지)
+        if (n.type === "area") {
+          const ab = getBox(n);
+          if (centerInside(srcNode, ab) || centerInside(tgtNode, ab)) return false;
+        }
+        return true;
+      })
       .map(n => {
-        const x = n.position?.x || 0;
-        const y = n.position?.y || 0;
-        const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
-        const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
+        const b = getBox(n);
         // IT 라인은 Area Block 경계와 더 멀리 — 큰 PADDING (16px)
         const pad = 16;
         return {
-          x1: x - pad,
-          y1: y - pad,
-          x2: x + w + pad,
-          y2: y + h + pad,
+          x1: b.x - pad,
+          y1: b.y - pad,
+          x2: b.x + b.w + pad,
+          y2: b.y + b.h + pad,
         };
       });
   }, [source, target,
@@ -3614,9 +3694,8 @@ const ITEdge = ({
     if (!svg) return;
     const seg = segs[segIdx];
     const origPos = toSVG(svg, e);
-    const initWps = storedWp.length > 0
-      ? storedWp.map(p => ({...p}))
-      : pts.slice(1, -1).map(p => ({...p}));
+    // v10.8: 항상 렌더된 경로(pts) 기준 — 인덱스 어긋남으로 인한 사선 방지
+    const initWps = pts.slice(1, -1).map(p => ({...p}));
 
     const onMove = mv => {
       const cur = toSVG(svg, mv);
