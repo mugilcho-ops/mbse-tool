@@ -3134,92 +3134,141 @@ const ITEdge = ({
   targetX, targetY, targetPosition,
   source, target, data, selected,
 }) => {
+  const { getNodes, getEdges } = useReactFlow();
   const itNo = data?.itNo || "IT-?";
   const mkId = `it_arrow_${id}`;
 
-  // ── 직각 (Manhattan) 라우팅 ─────────────────────────────
-  // 베지어 산만함 제거 — 다른 라인과 일관된 시각 언어, 깔끔한 평행 표현
-  const dir = (pos) => pos === "right" ? {dx:1,dy:0}
-                     : pos === "left"  ? {dx:-1,dy:0}
-                     : pos === "bottom"? {dx:0,dy:1}
-                     : {dx:0,dy:-1};
-  const sv = dir(sourcePosition);
-  const tv = dir(targetPosition);
+  // ── 장애물 수집 (IT는 Area도 회피해야 함, 자기 source/target 제외) ──
+  // 일반 노드(Equipment, Instrument)도 회피하여 깔끔한 여백 라우팅 보장
+  const allNodes = getNodes();
+  const obstacles = useMemo(() => {
+    return allNodes
+      .filter(n => n.id !== source && n.id !== target)
+      .map(n => {
+        const x = n.position?.x || 0;
+        const y = n.position?.y || 0;
+        const w = n.measured?.width  ?? n.width  ?? n.style?.width  ?? 120;
+        const h = n.measured?.height ?? n.height ?? n.style?.height ?? 60;
+        // IT 라인은 Area Block 경계와 더 멀리 — 큰 PADDING (16px)
+        const pad = 16;
+        return {
+          x1: x - pad,
+          y1: y - pad,
+          x2: x + w + pad,
+          y2: y + h + pad,
+        };
+      });
+  }, [source, target,
+    allNodes.map(n => `${n.id}:${n.position?.x},${n.position?.y}:${n.measured?.width||n.width||0}x${n.measured?.height||n.height||0}`).join("|"),
+  ]);
 
-  // 핸들에서 살짝 빠져나온 stub, 그 다음 중간 분기점을 거쳐 다시 stub
-  const STUB = 25;
-  const sx2 = sourceX + sv.dx*STUB, sy2 = sourceY + sv.dy*STUB;
-  const tx2 = targetX + tv.dx*STUB, ty2 = targetY + tv.dy*STUB;
+  const storedWp   = data?.waypoints || [];
+  const isDragging = data?._dragging === true;
 
-  // 라우팅 결정 (4가지 케이스)
-  let pts;
-  if (sv.dy===0 && tv.dy===0) {
-    // 좌↔우 또는 우↔좌 (수평 출발/도착): 중간에 X 분기
-    const mx = (sx2+tx2)/2;
-    pts = [
-      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
-      {x:mx,y:sy2},{x:mx,y:ty2},
-      {x:tx2,y:ty2},{x:targetX,y:targetY},
-    ];
-  } else if (sv.dx===0 && tv.dx===0) {
-    // 위↔아래 (수직 출발/도착): 중간에 Y 분기 — 가장 흔한 케이스 (상단/하단 포트 간)
-    const my = (sy2+ty2)/2;
-    pts = [
-      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
-      {x:sx2,y:my},{x:tx2,y:my},
-      {x:tx2,y:ty2},{x:targetX,y:targetY},
-    ];
-  } else if (sv.dy===0) {
-    pts = [
-      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
-      {x:tx2,y:sy2},{x:tx2,y:ty2},
-      {x:targetX,y:targetY},
-    ];
-  } else {
-    pts = [
-      {x:sourceX,y:sourceY},{x:sx2,y:sy2},
-      {x:sx2,y:ty2},{x:tx2,y:ty2},
-      {x:targetX,y:targetY},
-    ];
-  }
-
-  // path 생성 (rounded corners)
-  let dPath = `M ${pts[0].x} ${pts[0].y}`;
-  for (let i=1; i<pts.length; i++) {
-    const p=pts[i-1], q=pts[i], n=pts[i+1];
-    if (!n) { dPath += ` L ${q.x} ${q.y}`; }
-    else {
-      const dx1=q.x-p.x, dy1=q.y-p.y, dx2=n.x-q.x, dy2=n.y-q.y;
-      const l1=Math.hypot(dx1,dy1)||1, l2=Math.hypot(dx2,dy2)||1;
-      const r=Math.min(10, l1/2, l2/2);
-      dPath += ` L ${q.x-(dx1/l1)*r} ${q.y-(dy1/l1)*r}`;
-      dPath += ` Q ${q.x} ${q.y} ${q.x+(dx2/l2)*r} ${q.y+(dy2/l2)*r}`;
+  // ── 경로 계산 ─────────────────────────────────────────────
+  //  · 수동 waypoints → 그대로 사용 (사용자 조정 우선)
+  //  · 드래그 중 → 빠른 L-shape (avoidObstacles)
+  //  · 정상 → A* 정밀 라우팅
+  const pts = useMemo(() => {
+    if (storedWp.length > 0) {
+      return routePipe(
+        sourceX, sourceY, sourcePosition || "top",
+        targetX, targetY, targetPosition || "top",
+        storedWp
+      );
     }
-  }
-
-  // 라벨 위치: 가장 긴 세그먼트 중앙
-  let longest = {mx:0,my:0,len:0};
-  for (let i=0; i<pts.length-1; i++) {
-    const len = Math.hypot(pts[i+1].x-pts[i].x, pts[i+1].y-pts[i].y);
-    if (len > longest.len) {
-      longest = { mx:(pts[i].x+pts[i+1].x)/2, my:(pts[i].y+pts[i+1].y)/2, len };
+    if (isDragging) {
+      const raw = routePipe(
+        sourceX, sourceY, sourcePosition || "top",
+        targetX, targetY, targetPosition || "top",
+        []
+      );
+      return avoidObstacles(raw, obstacles);
     }
-  }
+    // A* 정밀
+    const aStar = findPathAStar(
+      sourceX, sourceY, sourcePosition || "top",
+      targetX, targetY, targetPosition || "top",
+      obstacles
+    );
+    if (aStar && aStar.length >= 2) {
+      return normalizePath(aStar);
+    }
+    // 폴백
+    const raw = routePipe(
+      sourceX, sourceY, sourcePosition || "top",
+      targetX, targetY, targetPosition || "top",
+      []
+    );
+    return avoidObstacles(raw, obstacles);
+  }, [id, source, target, sourceX, sourceY, sourcePosition,
+      targetX, targetY, targetPosition, storedWp, obstacles, isDragging]);
 
-  // 체크리스트 진척 상태 색상 (라벨용)
-  // 5개 카테고리 중 content 채워진 비율
+  const dPath = buildElbowPath(pts);
+  const segs  = getSegments(pts);
+
+  // ── 라벨 위치: 가장 긴 세그먼트 중앙 ─────────────────────
+  const longest = segs.reduce((a,b)=>b.len>a.len?b:a, segs[0]||{mx:0,my:0,len:0});
+
+  // ── 체크리스트 진척 상태 색상 (라벨 테두리) ──────────────
   const cl = data?.checklist || {};
   const total = Object.keys(cl).length || 5;
   const done  = Object.values(cl).filter(c => (c?.content||"").trim()).length;
   const pct   = total > 0 ? done/total : 0;
-  const statusColor = pct === 1 ? "#16a34a"    // 완료 = 초록
-                    : pct > 0    ? "#f59e0b"    // 진행 = 오렌지
-                    : "#94a3b8";                // 미작성 = 회색
+  const statusColor = pct === 1 ? "#16a34a"
+                    : pct > 0    ? "#f59e0b"
+                    : "#94a3b8";
 
-  // ── stroke: 평소엔 얇고 흐림, 선택/Interface 모드 시 진함 ──
-  // 실제 모드별 가시성은 .mbse-it-edge CSS 클래스로 처리 (App에서 토글)
+  // ── stroke ──
   const stroke = selected ? "#f59e0b" : "#7c3aed";
   const sw     = selected ? 3.5 : 2;
+
+  // ── SVG 좌표 변환 (마우스 좌표 → SVG 좌표) ──
+  const toSVG = (svg, ev) => {
+    const p = svg.createSVGPoint();
+    p.x = ev.clientX; p.y = ev.clientY;
+    return p.matrixTransform(svg.getScreenCTM().inverse());
+  };
+
+  // ── 세그먼트 드래그: 사용자 라우트 조정 ─────────────────
+  // 수평 세그먼트 → 위/아래로 드래그하여 Y 이동
+  // 수직 세그먼트 → 좌/우로 드래그하여 X 이동
+  const onSegDrag = useCallback((e, segIdx) => {
+    e.stopPropagation();
+    const svg = e.target.closest("svg");
+    if (!svg) return;
+    const seg = segs[segIdx];
+    const origPos = toSVG(svg, e);
+    const initWps = storedWp.length > 0
+      ? storedWp.map(p => ({...p}))
+      : pts.slice(1, -1).map(p => ({...p}));
+
+    const onMove = mv => {
+      const cur = toSVG(svg, mv);
+      const nw = initWps.map(p => ({...p}));
+      const wi1 = segIdx - 1, wi2 = segIdx;
+      if (seg.isHoriz) {
+        const dy = cur.y - origPos.y;
+        if (wi1 >= 0 && wi1 < nw.length) nw[wi1] = {...nw[wi1], y: initWps[wi1].y + dy};
+        if (wi2 >= 0 && wi2 < nw.length) nw[wi2] = {...nw[wi2], y: (initWps[wi2]?.y ?? cur.y) + dy};
+      } else {
+        const dx = cur.x - origPos.x;
+        if (wi1 >= 0 && wi1 < nw.length) nw[wi1] = {...nw[wi1], x: initWps[wi1].x + dx};
+        if (wi2 >= 0 && wi2 < nw.length) nw[wi2] = {...nw[wi2], x: (initWps[wi2]?.x ?? cur.x) + dx};
+      }
+      const allPts = normalizePath([
+        {x:sourceX, y:sourceY}, ...nw, {x:targetX, y:targetY}
+      ]);
+      window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+        { detail: { id, waypoints: allPts.slice(1, -1) } }));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }, [id, segs, storedWp, pts, sourceX, sourceY, targetX, targetY]);
 
   return (
     <g className="mbse-it-edge" data-it-id={id} data-selected={selected ? "1" : "0"}>
@@ -3233,8 +3282,10 @@ const ITEdge = ({
           <polygon points="0,0 9,3.5 0,7" fill={stroke}/>
         </marker>
       </defs>
-      {/* 히트 영역 */}
+
+      {/* 히트 영역 (라인 클릭 영역 확장) */}
       <path d={dPath} fill="none" stroke="transparent" strokeWidth={20} style={{cursor:"pointer"}}/>
+
       {/* 실제 라인 */}
       <path className="mbse-it-edge-path" d={dPath} fill="none"
         stroke={stroke} strokeWidth={sw}
@@ -3242,6 +3293,30 @@ const ITEdge = ({
         markerEnd={`url(#${mkId})`}
         markerStart={`url(#${mkId}_start)`}
         style={{pointerEvents:"none"}}/>
+
+      {/* ── 세그먼트 중앙 드래그 핸들 (선택 시만, stub 제외) ── */}
+      {selected && segs.map((seg, i) => {
+        if (seg.len < 24) return null;
+        const isStub = i === 0 || i === segs.length - 1;
+        if (isStub) return null;
+        const cursor = seg.isHoriz ? "ns-resize" : "ew-resize";
+        return (
+          <g key={i}>
+            {/* 작은 원형 핸들 — 드래그로 라우트 조정 */}
+            <circle
+              cx={seg.mx} cy={seg.my} r={6}
+              fill="#fff" stroke="#7c3aed" strokeWidth={2.5}
+              style={{ cursor, pointerEvents:"all" }}
+              onMouseDown={ev => onSegDrag(ev, i)}
+            />
+            <circle
+              cx={seg.mx} cy={seg.my} r={2.5}
+              fill="#7c3aed" style={{ pointerEvents:"none" }}
+            />
+          </g>
+        );
+      })}
+
       {/* IT-N 라벨 (클릭 시 모달 열림) */}
       <EdgeLabelRenderer>
         <div
@@ -3269,7 +3344,7 @@ const ITEdge = ({
             e.stopPropagation();
             window.dispatchEvent(new CustomEvent("mbse:open-it-modal", { detail:{ id } }));
           }}
-          title={`${itNo} — 체크리스트 ${done}/${total} 작성됨`}
+          title={`${itNo} — 체크리스트 ${done}/${total} 작성됨 (선택 후 라인 중간 핸들을 끌어 라우트 조정 가능)`}
         >
           🔗 {itNo}
         </div>
@@ -4431,6 +4506,294 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
   );
 };
 
+// ═══════════════════════════════════════════════════════════════
+// SEARCH MODAL — 노드/엣지 전역 검색 + 카메라 이동
+// 단축키 Ctrl+F 또는 툴바 🔍 버튼으로 호출
+// ═══════════════════════════════════════════════════════════════
+const SearchModal = ({ nodes, edges, onSelect, onClose }) => {
+  const [query, setQuery] = useState("");
+  const [activeIdx, setActiveIdx] = useState(0);
+  const inputRef = useRef(null);
+  const listRef = useRef(null);
+
+  useEffect(() => {
+    // 모달 열면 자동 포커스
+    inputRef.current?.focus();
+  }, []);
+
+  // ── 검색 인덱스 구축 (메모이즈) ─────────────────────────
+  // 각 항목은 { type, id, label, sub, fields[] } 구조
+  // fields[] 에 매칭 대상 텍스트가 모두 들어가서 검색 가능
+  const index = useMemo(() => {
+    const items = [];
+    nodes.forEach(n => {
+      const d = n.data || {};
+      if (n.type === "area") {
+        items.push({
+          type: "area", id: n.id,
+          label: d.label || "(이름 없음)",
+          sub:   `${d.areaType||"Area"}${d.vendorName?` · ${d.vendorName}`:""}`,
+          icon:  d.areaType==="Plant" ? "🏭"
+               : d.areaType==="System"? "⚙️"
+               : d.areaType==="Package"? "📦" : "📐",
+          fields: [d.label, d.areaType, d.wbsCode, d.vendorName, d.scopeText, d.teamId, d.discipline].filter(Boolean),
+        });
+      } else if (n.type === "equipment") {
+        items.push({
+          type: "equipment", id: n.id,
+          label: d.label || "(이름 없음)",
+          sub:   `${d.itemNo||""}${d.itemNo&&d.equipType?" · ":""}${d.equipType||""}`,
+          icon:  "⚙️",
+          fields: [d.label, d.itemNo, d.equipType, d.material, d.capacity, d.summary].filter(Boolean),
+        });
+      } else if (n.type === "instrument") {
+        items.push({
+          type: "instrument", id: n.id,
+          label: d.label || "(이름 없음)",
+          sub:   `${d.itemNo||""}${d.itemNo&&d.instrType?" · ":""}${d.instrType||""}`,
+          icon:  "📊",
+          fields: [d.label, d.itemNo, d.instrCategory, d.instrType].filter(Boolean),
+        });
+      } else if (n.type === "brench") {
+        // Brench는 라벨이 없으니 _hint나 ID만 검색
+        items.push({
+          type: "brench", id: n.id,
+          label: "(Branch)",
+          sub: d._hint || n.id,
+          icon: "🔀",
+          fields: [d._hint, n.id].filter(Boolean),
+        });
+      }
+    });
+    edges.forEach(e => {
+      const d = e.data || {};
+      if (e.type === "itEdge") {
+        const srcN = nodes.find(x => x.id === e.source);
+        const tgtN = nodes.find(x => x.id === e.target);
+        const desc = `${srcN?.data?.label||srcN?.id||"?"} ↔ ${tgtN?.data?.label||tgtN?.id||"?"}`;
+        items.push({
+          type: "itEdge", id: e.id,
+          label: d.itNo || "IT-?",
+          sub: desc,
+          icon: "🔗",
+          fields: [d.itNo, d.description, d.functionalDesc, ...(d.influenceFactors||[]), desc].filter(Boolean),
+        });
+      } else {
+        // pipe / connection
+        if (!d.ic_no && !d.icd_no && !d.tq_no && !d.lineText && !d.fluidSub && !d.serialNo) return;
+        const label = d.ic_no || d.icd_no || d.lineText || d.serialNo || (d.fluidSub||"Line");
+        const sub = [d.fluidSub, d.sizeNum?`${d.sizeNum}A`:d.size, d.lineType, d.ic_status]
+                    .filter(Boolean).join(" · ");
+        items.push({
+          type: "pipe", id: e.id,
+          label,
+          sub,
+          icon: d.lineType==="Process Gas"?"💨"
+              : d.lineType==="Material"?"🟫"
+              : "═",
+          fields: [d.ic_no, d.icd_no, d.tq_no, d.lineText, d.fluidSub, d.serialNo, d.ic_status, d.ifType, d.lineType].filter(Boolean),
+        });
+      }
+    });
+    return items;
+  }, [nodes, edges]);
+
+  // ── 검색 결과 필터링 (대소문자 무시, 부분 매칭, 점수 정렬) ──
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const matched = [];
+    index.forEach(item => {
+      let bestField = "";
+      let bestScore = 0;
+      for (const f of item.fields) {
+        const fl = String(f).toLowerCase();
+        if (fl === q) {
+          if (10 > bestScore) { bestScore = 10; bestField = f; }
+        } else if (fl.startsWith(q)) {
+          if (5 > bestScore) { bestScore = 5; bestField = f; }
+        } else if (fl.includes(q)) {
+          if (3 > bestScore) { bestScore = 3; bestField = f; }
+        }
+      }
+      if (bestScore > 0) matched.push({ ...item, score: bestScore, matchedField: bestField });
+    });
+    matched.sort((a,b) => b.score - a.score);
+    return matched.slice(0, 50);
+  }, [index, query]);
+
+  // 결과가 바뀌면 active index 리셋
+  useEffect(() => { setActiveIdx(0); }, [query]);
+
+  // 키보드 네비게이션
+  const handleKeyDown = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setActiveIdx(i => Math.min(i+1, results.length-1));
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setActiveIdx(i => Math.max(i-1, 0));
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (results[activeIdx]) {
+        onSelect(results[activeIdx]);
+      }
+    }
+  };
+
+  // 활성 항목 자동 스크롤
+  useEffect(() => {
+    const el = listRef.current?.children?.[activeIdx];
+    if (el) el.scrollIntoView({ block:"nearest" });
+  }, [activeIdx]);
+
+  // 매칭된 부분을 hi-light
+  const highlight = (text) => {
+    if (!query) return text;
+    const t = String(text);
+    const lower = t.toLowerCase();
+    const idx = lower.indexOf(query.toLowerCase());
+    if (idx === -1) return t;
+    return (
+      <>
+        {t.slice(0, idx)}
+        <span style={{ background:"#fde047", color:"#713f12", fontWeight:700, padding:"0 1px", borderRadius:2 }}>
+          {t.slice(idx, idx+query.length)}
+        </span>
+        {t.slice(idx+query.length)}
+      </>
+    );
+  };
+
+  const typeColors = {
+    area:       { bg:"#dbeafe", fc:"#1e40af" },
+    equipment:  { bg:"#e0f2fe", fc:"#075985" },
+    instrument: { bg:"#dcfce7", fc:"#166534" },
+    brench:     { bg:"#fef3c7", fc:"#92400e" },
+    pipe:       { bg:"#f3e8ff", fc:"#6b21a8" },
+    itEdge:     { bg:"#ede9fe", fc:"#5b21b6" },
+  };
+  const typeLabel = {
+    area:"Area", equipment:"Equip.", instrument:"Instr.",
+    brench:"Branch", pipe:"Line", itEdge:"IT",
+  };
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position:"fixed", inset:0, background:"rgba(15,23,42,0.55)", zIndex:1000,
+        display:"flex", alignItems:"flex-start", justifyContent:"center", paddingTop:"10vh",
+      }}
+    >
+      <div
+        onClick={e => e.stopPropagation()}
+        style={{
+          width:580, maxHeight:"75vh", background:"#fff", borderRadius:10,
+          boxShadow:"0 20px 50px rgba(0,0,0,0.3)", overflow:"hidden",
+          display:"flex", flexDirection:"column",
+        }}
+      >
+        {/* 검색 입력 */}
+        <div style={{
+          padding:"14px 18px", borderBottom:"1px solid #e2e8f0",
+          display:"flex", alignItems:"center", gap:10,
+        }}>
+          <span style={{ fontSize:18 }}>🔍</span>
+          <input
+            ref={inputRef}
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="노드명, Item No., IC No., IT-N, 라인 번호로 검색..."
+            style={{
+              flex:1, fontSize:14, padding:"4px 6px",
+              border:"none", outline:"none", color:"#1e293b",
+            }}
+          />
+          <span style={{ fontSize:11, color:"#94a3b8" }}>
+            {query ? `${results.length}건` : `전체 ${index.length}건`}
+          </span>
+          <button onClick={onClose} style={{
+            background:"#f1f5f9", border:"none", color:"#475569",
+            padding:"3px 9px", borderRadius:4, cursor:"pointer", fontSize:10, fontWeight:700,
+          }}>ESC</button>
+        </div>
+
+        {/* 결과 목록 */}
+        <div ref={listRef} style={{ flex:1, overflowY:"auto", padding:"4px 0" }}>
+          {!query && (
+            <div style={{ padding:30, textAlign:"center", color:"#94a3b8", fontSize:12, lineHeight:1.8 }}>
+              <div style={{ fontSize:32, marginBottom:8 }}>🔍</div>
+              <div>이름, Item No., IC No., IT-N, 라인 번호 등으로 검색하세요</div>
+              <div style={{ fontSize:10, marginTop:10, color:"#cbd5e1" }}>
+                ↑↓ 이동 · Enter 선택 · Esc 닫기
+              </div>
+            </div>
+          )}
+          {query && results.length === 0 && (
+            <div style={{ padding:30, textAlign:"center", color:"#94a3b8", fontSize:12 }}>
+              검색 결과 없음
+            </div>
+          )}
+          {results.map((r, i) => {
+            const tc = typeColors[r.type] || { bg:"#f1f5f9", fc:"#475569" };
+            const active = i === activeIdx;
+            return (
+              <div
+                key={`${r.type}-${r.id}`}
+                onClick={() => onSelect(r)}
+                onMouseEnter={() => setActiveIdx(i)}
+                style={{
+                  padding:"8px 18px", cursor:"pointer",
+                  borderLeft: active ? "3px solid #2563eb" : "3px solid transparent",
+                  background: active ? "#eff6ff" : "transparent",
+                  display:"flex", alignItems:"center", gap:10,
+                  transition: "background 0.1s ease",
+                }}
+              >
+                <span style={{ fontSize:18, width:24, textAlign:"center" }}>{r.icon}</span>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:13, fontWeight:700, color:"#1e293b", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                    {highlight(r.label)}
+                  </div>
+                  <div style={{ fontSize:11, color:"#64748b", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>
+                    {highlight(r.sub)}
+                    {r.matchedField && !String(r.sub||"").toLowerCase().includes(query.toLowerCase()) &&
+                     !String(r.label||"").toLowerCase().includes(query.toLowerCase()) && (
+                      <span style={{ marginLeft:6, color:"#94a3b8" }}>
+                        ⤷ {highlight(String(r.matchedField).slice(0,40))}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span style={{
+                  fontSize:10, padding:"2px 7px", borderRadius:3,
+                  background: tc.bg, color: tc.fc, fontWeight:700, whiteSpace:"nowrap",
+                }}>
+                  {typeLabel[r.type]}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 하단 안내 */}
+        {results.length > 0 && (
+          <div style={{
+            padding:"6px 18px", borderTop:"1px solid #e2e8f0", background:"#f8fafc",
+            fontSize:10, color:"#94a3b8", display:"flex", justifyContent:"space-between",
+          }}>
+            <span>↑↓ 이동 · Enter 선택 · Esc 닫기</span>
+            <span>{activeIdx+1} / {results.length}</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 // ─────────────────────────────────────────────────────────────
 // SPEC IMPORT MODAL
 // 사양서 텍스트 붙여넣기 → Item No. 기준 자동 매핑
@@ -4812,7 +5175,7 @@ const ConnModal = ({ onConfirm, onCancel, defaultType="Piping", canBeIT=false })
 // ─────────────────────────────────────────────────────────────
 const CanvasInner = () => {
   const wrapRef=useRef(null);
-  const { screenToFlowPosition, fitView }=useReactFlow();
+  const { screenToFlowPosition, fitView, setCenter, getZoom }=useReactFlow();
   const [nodes,setNodes,onNodesChange]=useNodesState([]);
   const [edges,setEdges,onEdgesChange]=useEdgesState([]);
   const [sel,setSel]       = useState(null);
@@ -4825,6 +5188,8 @@ const CanvasInner = () => {
   const [interfaceMode, setInterfaceMode] = useState(false);
   // v10.3+: 특정 Area의 IT 목록 팝업
   const [itListAreaId, setItListAreaId] = useState(null);
+  // v10.4: 전역 검색 모달 (Ctrl+F)
+  const [showSearch, setShowSearch] = useState(false);
   const [guides,setGuides] = useState([]);
   const [showSpecImport, setShowSpecImport] = useState(false); // Smart Guide 가상선
   const connRef     = useRef(null);
@@ -5371,11 +5736,62 @@ const CanvasInner = () => {
     setSel(null);
   },[sel,setNodes,setEdges]);
 
+  // v10.4: 검색 결과 선택 → 카메라 이동 + 항목 강조
+  const handleSearchSelect = useCallback((item) => {
+    setShowSearch(false);
+    // Node 인 경우: 노드 중심으로 이동
+    if (["area","equipment","instrument","brench"].includes(item.type)) {
+      const node = nodes.find(n => n.id === item.id);
+      if (!node) return;
+      const w = node.measured?.width  ?? node.width  ?? node.style?.width  ?? 120;
+      const h = node.measured?.height ?? node.height ?? node.style?.height ?? 60;
+      const cx = (node.position?.x||0) + w/2;
+      const cy = (node.position?.y||0) + h/2;
+      // 현재 줌이 너무 작으면 0.7 이상으로
+      const targetZoom = Math.max(getZoom(), 0.7);
+      setCenter(cx, cy, { zoom: targetZoom, duration: 500 });
+      // 노드 선택 상태 표시
+      setNodes(ns => ns.map(n => ({ ...n, selected: n.id === item.id })));
+      setSel(node);
+    }
+    // Edge 인 경우: source/target 중간점으로 이동
+    else if (["pipe","itEdge"].includes(item.type)) {
+      const edge = edges.find(e => e.id === item.id);
+      if (!edge) return;
+      const srcN = nodes.find(n => n.id === edge.source);
+      const tgtN = nodes.find(n => n.id === edge.target);
+      if (!srcN || !tgtN) return;
+      const sw = srcN.measured?.width  ?? srcN.width  ?? 120;
+      const sh = srcN.measured?.height ?? srcN.height ?? 60;
+      const tw = tgtN.measured?.width  ?? tgtN.width  ?? 120;
+      const th = tgtN.measured?.height ?? tgtN.height ?? 60;
+      const sx = (srcN.position?.x||0) + sw/2;
+      const sy = (srcN.position?.y||0) + sh/2;
+      const tx = (tgtN.position?.x||0) + tw/2;
+      const ty = (tgtN.position?.y||0) + th/2;
+      const targetZoom = Math.max(getZoom(), 0.6);
+      setCenter((sx+tx)/2, (sy+ty)/2, { zoom: targetZoom, duration: 500 });
+      // 엣지 선택 상태 표시
+      setEdges(es => es.map(e => ({ ...e, selected: e.id === item.id })));
+      setSel(edge);
+      // IT 라인이면 모달도 함께 열기
+      if (item.type === "itEdge") {
+        setTimeout(() => setItModalEdgeId(item.id), 550);
+      }
+    }
+  }, [nodes, edges, setNodes, setEdges, setCenter, getZoom]);
+
   // 키보드 단축키
   useEffect(()=>{
     const fn=e=>{
       const tag=document.activeElement?.tagName?.toLowerCase();
       const inInput=tag==="input"||tag==="textarea"||tag==="select";
+      // v10.4: Ctrl+F → 전역 검색 모달 (inInput 무시 — 어디서든 호출 가능)
+      if (e.ctrlKey && e.key.toLowerCase()==="f") {
+        e.preventDefault();
+        setShowSearch(true);
+        return;
+      }
       if((e.key==="Delete"||e.key==="Backspace")&&sel&&!inInput){ onDeleteSel(); return; }
       // Undo
       if(e.ctrlKey&&e.key==="z"&&!inInput){ e.preventDefault(); undo(); return; }
@@ -5481,6 +5897,23 @@ const CanvasInner = () => {
           {/* 구분선 */}
           <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
 
+          {/* v10.4: 🔍 Search 버튼 (단축키 Ctrl+F) */}
+          <button onClick={()=>setShowSearch(true)}
+            style={{
+              background:"#1e293b", color:"#fbbf24",
+              border:"1px solid #475569", borderRadius:5,
+              padding:"3px 10px", cursor:"pointer",
+              fontSize:11, fontWeight:600,
+              display:"inline-flex", alignItems:"center", gap:5,
+            }}
+            title="검색 (Ctrl+F) — 노드/엣지/IC/IT 전역 검색"
+          >
+            🔍 Search
+            <span style={{ fontSize:9, opacity:0.7, background:"#0f172a", padding:"1px 4px", borderRadius:3, marginLeft:2 }}>
+              Ctrl+F
+            </span>
+          </button>
+
           {/* 💾 Save 버튼 */}
           <button onClick={onSave}
             style={{ background:"#1d4ed8",color:"#fff",border:"none",borderRadius:5,padding:"3px 12px",cursor:"pointer",fontSize:11,fontWeight:700 }}>
@@ -5569,6 +6002,9 @@ const CanvasInner = () => {
               connectionLineType="straight"
               connectionLineStyle={{ stroke:"#0d9488",strokeWidth:2,strokeDasharray:"4 2" }}
               defaultEdgeOptions={{ type:"pipe" }}
+              // ── 성능 최적화: viewport 밖 노드 렌더링 안 함 ──
+              // 화면에 안 보이는 노드/엣지는 DOM 에서 제외 → 대규모 모델에서 부드러움
+              onlyRenderVisibleElements={true}
               // ── 노드 선택 시 자동 z-index 상승 비활성화 ──
               // Area를 클릭해도 내부 Equipment가 위에 머물러 클릭 가능
               elevateNodesOnSelect={false}
@@ -5818,6 +6254,16 @@ const CanvasInner = () => {
           </div>
         );
       })()}
+
+      {/* v10.4: 전역 검색 모달 (Ctrl+F) */}
+      {showSearch && (
+        <SearchModal
+          nodes={nodes}
+          edges={edges}
+          onSelect={handleSearchSelect}
+          onClose={()=>setShowSearch(false)}
+        />
+      )}
 
       {/* 사양서 자동 입력 모달 */}
       {showSpecImport && (
