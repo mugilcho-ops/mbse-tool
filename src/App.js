@@ -1518,6 +1518,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
 // GLOBAL CSS
 // ─────────────────────────────────────────────────────────────
 const GLOBAL_CSS = `
+  /* ── Pipe 라인 호버 하이라이트 — 마우스 올리면 살짝 강조 ── */
+  .mbse-pipe-edge:hover {
+    filter: brightness(1.2) drop-shadow(0 0 2px rgba(37,99,235,0.35));
+  }
+
   /* ─────────────────────────────────────────────
      IT (Interface Tie-in) 라인 — 평소 & 모드별 가시성
      ───────────────────────────────────────────── */
@@ -2502,7 +2507,7 @@ const SNAP_TOL  = 6;
 const GRID      = 10;   // A* grid resolution
 const PADDING   = 8;    // bbox 확장 padding
 const CORNER_COST = 5;  // A* 꺾임 페널티
-const PARALLEL_GAP = 4; // 같은 segment 공유 시 평행 간격
+const PARALLEL_GAP = 10; // 같은 segment 공유 시 평행 간격 (P&ID 가독성)
 
 // 좌표 → grid 스냅
 const snapGrid = (v) => Math.round(v / GRID) * GRID;
@@ -3045,19 +3050,45 @@ const routeOrthogonal = (sx, sy, srcPos, tx, ty, tgtPos, obstacles) => {
     { x: sStub.x, y: midY }, { x: tStub.x, y: midY },
     tStub, tgt]);
 
-  // 3) 충돌 없는 첫 후보 선택 (단순한 것 우선: A, B, C, D 순)
+  // 3) 충돌 없는 후보들을 점수화 → 최적 선택
+  //    점수 = 꺾임수×80 + 경로길이×0.5 + 역주행 페널티
+  //    (꺾임이 적고 짧으며 포트 방향을 거스르지 않는 경로 우선)
+  const scoreRoute = (norm) => {
+    let bends = 0, len = 0;
+    for (let i = 1; i < norm.length; i++) {
+      len += Math.abs(norm[i].x - norm[i-1].x) + Math.abs(norm[i].y - norm[i-1].y);
+      if (i < norm.length - 1) {
+        const dx1 = norm[i].x - norm[i-1].x, dy1 = norm[i].y - norm[i-1].y;
+        const dx2 = norm[i+1].x - norm[i].x, dy2 = norm[i+1].y - norm[i].y;
+        if ((Math.abs(dx1) > 0.5) !== (Math.abs(dx2) > 0.5)) bends++;
+      }
+    }
+    // 역주행 페널티: stub 직후 세그먼트가 포트 방향과 반대로 가면 +120
+    let backtrack = 0;
+    if (norm.length >= 3) {
+      const p1 = norm[1], p2 = norm[2];
+      const prog = (p2.x - p1.x) * sv.dx + (p2.y - p1.y) * sv.dy;
+      if (prog < -0.5) backtrack += 120;
+    }
+    return bends * 80 + len * 0.5 + backtrack;
+  };
+
+  let best = null, bestScore = Infinity;
   for (const cand of candidates) {
     const norm = normalizePath(cand);
     if (pathClearOrtho(norm, obstacles)) {
-      return norm;
+      const s = scoreRoute(norm);
+      if (s < bestScore) { bestScore = s; best = norm; }
     }
   }
+  if (best) return best;
 
-  // 4) 모든 단순 후보가 충돌 → 박스 우회 경로 생성
-  //    가장 큰 방해 박스를 찾아 위/아래 또는 좌/우로 우회
-  const baseRoute = normalizePath(candidates[0]);
-  const detoured = detourAroundBoxes(baseRoute, obstacles, sStub, tStub, src, tgt);
-  return detoured;
+  // 4) 모든 단순 후보가 충돌 → A·B 기반 우회 경로를 각각 생성해 더 나은 쪽 선택
+  const detA = detourAroundBoxes(normalizePath(candidates[0]), obstacles, sStub, tStub, src, tgt);
+  const detB = detourAroundBoxes(normalizePath(candidates[1]), obstacles, sStub, tStub, src, tgt);
+  const sA = scoreRoute(detA) + (pathClearOrtho(detA, obstacles) ? 0 : 500);
+  const sB = scoreRoute(detB) + (pathClearOrtho(detB, obstacles) ? 0 : 500);
+  return sA <= sB ? detA : detB;
 };
 
 // 박스 우회: 충돌 세그먼트를 박스 외곽으로 밀어냄
@@ -3266,11 +3297,12 @@ const PipeEdge = ({
       const nw=initWps.map(p=>({...p}));
       const wi1=segIdx-1,wi2=segIdx;
       if(seg.isHoriz){
-        const dy=cur.y-origPos.y;
+        // GRID(10px) 스냅 — 정돈된 좌표 유지
+        const dy=snapGrid(cur.y-origPos.y);
         if(wi1>=0&&wi1<nw.length) nw[wi1]={...nw[wi1],y:initWps[wi1].y+dy};
         if(wi2>=0&&wi2<nw.length) nw[wi2]={...nw[wi2],y:(initWps[wi2]?.y??cur.y)+dy};
       } else {
-        const dx=cur.x-origPos.x;
+        const dx=snapGrid(cur.x-origPos.x);
         if(wi1>=0&&wi1<nw.length) nw[wi1]={...nw[wi1],x:initWps[wi1].x+dx};
         if(wi2>=0&&wi2<nw.length) nw[wi2]={...nw[wi2],x:(initWps[wi2]?.x??cur.x)+dx};
       }
@@ -3284,7 +3316,7 @@ const PipeEdge = ({
   },[id,segs,storedWp,pts,sourceX,sourceY,targetX,targetY]);
 
   return (
-    <g>
+    <g className="mbse-pipe-edge">
       <defs>
         {/* 화살표: userSpaceOnUse → 라인 굵기와 무관한 절대 픽셀 크기 */}
         <marker id={mkId}
@@ -3305,9 +3337,25 @@ const PipeEdge = ({
         )}
       </defs>
 
-      {/* 히트 영역 */}
+      {/* 히트 영역 — 클릭: 선택 / 더블클릭: 수동 조정 리셋(자동 라우팅 복귀) */}
       <path d={path} fill="none" stroke="transparent" strokeWidth={16}
-        style={{cursor:"pointer"}}/>
+        style={{cursor:"pointer"}}
+        onDoubleClick={(e)=>{
+          e.stopPropagation();
+          if (storedWp.length > 0) {
+            window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+              {detail:{id, waypoints: []}}));
+          }
+        }}>
+        <title>{storedWp.length>0?"더블클릭: 자동 라우팅으로 복귀":""}</title>
+      </path>
+
+      {/* 선택 시 글로우 underlay — 어떤 라인이 선택됐는지 명확히 */}
+      {selected && (
+        <path d={path} fill="none"
+          stroke="#f59e0b" strokeWidth={sw+6} opacity={0.25}
+          strokeLinecap="round" style={{pointerEvents:"none"}}/>
+      )}
 
       {/* 실제 라인 */}
       <path d={path} fill="none"
@@ -3575,11 +3623,12 @@ const ITEdge = ({
       const nw = initWps.map(p => ({...p}));
       const wi1 = segIdx - 1, wi2 = segIdx;
       if (seg.isHoriz) {
-        const dy = cur.y - origPos.y;
+        // GRID(10px) 스냅 — 정돈된 좌표 유지
+        const dy = snapGrid(cur.y - origPos.y);
         if (wi1 >= 0 && wi1 < nw.length) nw[wi1] = {...nw[wi1], y: initWps[wi1].y + dy};
         if (wi2 >= 0 && wi2 < nw.length) nw[wi2] = {...nw[wi2], y: (initWps[wi2]?.y ?? cur.y) + dy};
       } else {
-        const dx = cur.x - origPos.x;
+        const dx = snapGrid(cur.x - origPos.x);
         if (wi1 >= 0 && wi1 < nw.length) nw[wi1] = {...nw[wi1], x: initWps[wi1].x + dx};
         if (wi2 >= 0 && wi2 < nw.length) nw[wi2] = {...nw[wi2], x: (initWps[wi2]?.x ?? cur.x) + dx};
       }
@@ -3610,8 +3659,25 @@ const ITEdge = ({
         </marker>
       </defs>
 
-      {/* 히트 영역 (라인 클릭 영역 확장) */}
-      <path d={dPath} fill="none" stroke="transparent" strokeWidth={20} style={{cursor:"pointer"}}/>
+      {/* 히트 영역 — 클릭: 선택(라우트 조정) / 더블클릭: 자동 라우팅 복귀 */}
+      <path d={dPath} fill="none" stroke="transparent" strokeWidth={20}
+        style={{cursor:"pointer"}}
+        onDoubleClick={(e)=>{
+          e.stopPropagation();
+          if (storedWp.length > 0) {
+            window.dispatchEvent(new CustomEvent("mbse:updatewaypoint",
+              { detail: { id, waypoints: [] } }));
+          }
+        }}>
+        <title>{storedWp.length>0?"더블클릭: 자동 라우팅으로 복귀":""}</title>
+      </path>
+
+      {/* 선택 시 글로우 underlay */}
+      {selected && (
+        <path d={dPath} fill="none"
+          stroke="#f59e0b" strokeWidth={sw+6} opacity={0.25}
+          strokeLinecap="round" style={{pointerEvents:"none"}}/>
+      )}
 
       {/* 실제 라인 */}
       <path className="mbse-it-edge-path" d={dPath} fill="none"
@@ -6353,7 +6419,9 @@ const CanvasInner = () => {
               onReconnectStart={onReconnectStart}
               onReconnectEnd={onReconnectEnd}
               edgesReconnectable={true}
-              reconnectRadius={20}
+              reconnectRadius={24}
+              // 연결 시 핸들 스냅 반경 확대 — 핸들 근처(36px)에서 자동 스냅
+              connectionRadius={36}
               onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} onPaneClick={onPaneClick}
               onNodeDragStart={onNodeDragStart}
               onNodeDrag={onNodeDrag}
