@@ -2986,6 +2986,127 @@ const reorthogonalizePath = (pts, srcPos, tgtPos) => {
   return normalizePath(r);
 };
 
+// ═══════════════════════════════════════════════════════════════
+// v10.7 결정론적 직교 라우터 (draw.io / yEd 스타일)
+//   · 모든 세그먼트 100% 수평/수직 (사선 금지)
+//   · 포트에서 고정 stub 후 직각 진입
+//   · L 또는 Z 형태의 단순 경로 (산 모양 방지)
+//   · 장애물은 bounding box 단위로 우회
+// ═══════════════════════════════════════════════════════════════
+const ORTHO_STUB = 28;   // 포트 이탈 직선 길이 (px)
+const ORTHO_MARGIN = 22; // 장애물 회피 여백 (px)
+
+// 선분(수평 또는 수직)이 박스와 교차하는지
+const segHitsBoxOrtho = (a, b, box) => {
+  const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
+  const minY = Math.min(a.y, b.y), maxY = Math.max(a.y, b.y);
+  return !(maxX < box.x1 || minX > box.x2 || maxY < box.y1 || minY > box.y2);
+};
+
+// 경로 전체가 장애물과 충돌하는지
+const pathClearOrtho = (pts, obstacles) => {
+  if (!obstacles || obstacles.length === 0) return true;
+  for (let i = 0; i < pts.length - 1; i++) {
+    for (const box of obstacles) {
+      if (segHitsBoxOrtho(pts[i], pts[i+1], box)) return false;
+    }
+  }
+  return true;
+};
+
+// 메인 직교 라우터
+const routeOrthogonal = (sx, sy, srcPos, tx, ty, tgtPos, obstacles) => {
+  const sv = portVec(srcPos);
+  const tv = portVec(tgtPos);
+
+  // 1) 포트에서 stub 만큼 직각 이탈
+  const sStub = { x: sx + sv.dx * ORTHO_STUB, y: sy + sv.dy * ORTHO_STUB };
+  const tStub = { x: tx + tv.dx * ORTHO_STUB, y: ty + tv.dy * ORTHO_STUB };
+
+  const src = { x: sx, y: sy };
+  const tgt = { x: tx, y: ty };
+
+  // 2) sStub → tStub 사이를 직각으로 연결하는 후보 경로들 생성
+  //    모든 후보는 100% 수평/수직 세그먼트로만 구성
+  const candidates = [];
+
+  // 후보 A: sStub → (tStub.x, sStub.y) → tStub  (수평 먼저)
+  candidates.push([src, sStub, { x: tStub.x, y: sStub.y }, tStub, tgt]);
+  // 후보 B: sStub → (sStub.x, tStub.y) → tStub  (수직 먼저)
+  candidates.push([src, sStub, { x: sStub.x, y: tStub.y }, tStub, tgt]);
+  // 후보 C: Z형 수평 분할 (중간 X에서 꺾기)
+  const midX = (sStub.x + tStub.x) / 2;
+  candidates.push([src, sStub,
+    { x: midX, y: sStub.y }, { x: midX, y: tStub.y },
+    tStub, tgt]);
+  // 후보 D: Z형 수직 분할 (중간 Y에서 꺾기)
+  const midY = (sStub.y + tStub.y) / 2;
+  candidates.push([src, sStub,
+    { x: sStub.x, y: midY }, { x: tStub.x, y: midY },
+    tStub, tgt]);
+
+  // 3) 충돌 없는 첫 후보 선택 (단순한 것 우선: A, B, C, D 순)
+  for (const cand of candidates) {
+    const norm = normalizePath(cand);
+    if (pathClearOrtho(norm, obstacles)) {
+      return norm;
+    }
+  }
+
+  // 4) 모든 단순 후보가 충돌 → 박스 우회 경로 생성
+  //    가장 큰 방해 박스를 찾아 위/아래 또는 좌/우로 우회
+  const baseRoute = normalizePath(candidates[0]);
+  const detoured = detourAroundBoxes(baseRoute, obstacles, sStub, tStub, src, tgt);
+  return detoured;
+};
+
+// 박스 우회: 충돌 세그먼트를 박스 외곽으로 밀어냄
+const detourAroundBoxes = (pts, obstacles, sStub, tStub, src, tgt) => {
+  if (!obstacles || obstacles.length === 0) return pts;
+  let work = pts.map(p => ({ ...p }));
+
+  for (let iter = 0; iter < 8; iter++) {
+    let hitFound = false;
+    const out = [work[0]];
+
+    for (let i = 0; i < work.length - 1; i++) {
+      const a = work[i], b = work[i+1];
+      const isH = Math.abs(a.y - b.y) < 1;
+
+      // 이 세그먼트와 충돌하는 박스 찾기
+      let box = null;
+      for (const o of obstacles) {
+        if (segHitsBoxOrtho(a, b, o)) { box = o; break; }
+      }
+
+      if (box) {
+        hitFound = true;
+        if (isH) {
+          // 수평 세그먼트 → 박스 위 또는 아래로 우회
+          const goAbove = Math.abs(a.y - (box.y1 - ORTHO_MARGIN)) <= Math.abs(a.y - (box.y2 + ORTHO_MARGIN));
+          const detourY = goAbove ? box.y1 - ORTHO_MARGIN : box.y2 + ORTHO_MARGIN;
+          out.push({ x: a.x, y: detourY });
+          out.push({ x: b.x, y: detourY });
+          out.push(b);
+        } else {
+          // 수직 세그먼트 → 박스 좌 또는 우로 우회
+          const goLeft = Math.abs(a.x - (box.x1 - ORTHO_MARGIN)) <= Math.abs(a.x - (box.x2 + ORTHO_MARGIN));
+          const detourX = goLeft ? box.x1 - ORTHO_MARGIN : box.x2 + ORTHO_MARGIN;
+          out.push({ x: detourX, y: a.y });
+          out.push({ x: detourX, y: b.y });
+          out.push(b);
+        }
+      } else {
+        out.push(b);
+      }
+    }
+
+    work = normalizePath(out);
+    if (!hitFound) break;
+  }
+  return work;
+};
+
 // ── SVG Rounded Elbow path ────────────────────────────────────
 const buildElbowPath = (pts, r=ELBOW_R) => {
   if (!pts||pts.length<2) return "";
@@ -3079,49 +3200,28 @@ const PipeEdge = ({
   const storedWp = data?.waypoints||[];
   const isDragging = data?._dragging===true;
 
-  // 경로 계산:
-  //  - 수동 waypoints 있음 → 정규화 + endpoint 직각 보정 (문제 3 해결)
-  //  - 드래그 중 → 빠른 L-shape 라우팅 (avoidObstacles)
-  //  - 정상 상태 → A* → 단순화 → stub 강제 (문제 1·2 해결)
+  // 경로 계산 (v10.7 결정론적 직교 라우터):
+  //  - 수동 waypoints 있음 → routePipe 정규화 (사용자 조정 우선)
+  //  - 그 외 → routeOrthogonal (사선 없는 L/Z 라우팅 + 박스 우회)
+  //  → 모든 세그먼트 100% 수평/수직 보장, 산 모양 방지
   const pts = useMemo(()=>{
     const sPos = sourcePosition||"right";
     const tPos = targetPosition||"left";
 
     if (storedWp.length > 0) {
-      // 사용자 조정 waypoint 사용
-      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, storedWp);
-      // 문제 3: endpoint(포트)가 이동했으면 인접 세그먼트를 직각으로 복원
-      //  → Block 이동 시 직선이 사선으로 바뀌는 것 방지
-      const reorth = reorthogonalizePath(raw, sPos, tPos);
-      return reorth;
+      // 사용자 조정 waypoint 사용 (정규화만 — 직각 스냅 포함)
+      return routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, storedWp);
     }
 
-    if (isDragging) {
-      // 빠른 휴리스틱
-      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
-      return avoidObstacles(raw, obstacles);
-    }
-
-    // A* 정밀 라우팅
-    const aStar = findPathAStar(sourceX, sourceY, sPos, targetX, targetY, tPos, obstacles);
-    if (aStar && aStar.length >= 2) {
-      // 1) 정규화
-      let route = normalizePath(aStar);
-      // 2) 문제 2: 산 모양 단순화 (불필요한 계단식 꺾임 제거)
-      route = simplifyPath(route, obstacles);
-      // 3) 문제 1: 끝점 수직 stub 강제 (화살표 직선 구간 확보)
-      route = enforceEndpointStubs(route, sPos, tPos);
-      // 4) 평행 offset 적용
-      route = applyParallelOffset(route, id, getEdges(), source, target);
-      // 5) 문제 2: 중간 세그먼트에 조정용 waypoint 삽입 (선택 시 핸들로 잡기 가능)
-      route = insertMidWaypoints(route);
-      return route;
-    }
-
-    // A* 실패 → L-shape 폴백
-    const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
-    const avoided = avoidObstacles(raw, obstacles);
-    return enforceEndpointStubs(avoided, sPos, tPos);
+    // 자동 라우팅: 결정론적 직교 (드래그 중엔 장애물 회피 생략으로 빠르게)
+    const route = routeOrthogonal(
+      sourceX, sourceY, sPos, targetX, targetY, tPos,
+      isDragging ? [] : obstacles
+    );
+    // 평행 offset (같은 노드 쌍 다중 라인 분리)
+    const offset = applyParallelOffset(route, id, getEdges(), source, target);
+    // 중간 세그먼트에 조정용 waypoint 삽입 (선택 시 핸들로 잡기 가능)
+    return isDragging ? offset : insertMidWaypoints(offset);
   },[id,source,target,sourceX,sourceY,sourcePosition,
      targetX,targetY,targetPosition,storedWp,obstacles,
      isDragging,getEdges]);
@@ -3407,38 +3507,27 @@ const ITEdge = ({
     return normalizePath(result);
   };
 
-  // ── 경로 계산 ─────────────────────────────────────────────
-  //  · 수동 waypoints → 그대로 사용 (사용자 조정 우선)
-  //  · 드래그 중 → 빠른 L-shape (avoidObstacles)
-  //  · 정상 → A* 정밀 라우팅
-  // 모든 결과에 enforceStubs() 적용 → 끝점 수직 stub 보장
+  // ── 경로 계산 (v10.7 결정론적 직교 라우터) ────────────────
+  //  · 수동 waypoints → routePipe 정규화 (사용자 조정 우선)
+  //  · 그 외 → routeOrthogonal + IT 전용 긴 stub
+  //  → 사선 없는 L/Z 라우팅, 산 모양 방지
   const pts = useMemo(() => {
     const sPos = sourcePosition || "top";
     const tPos = targetPosition || "top";
 
     if (storedWp.length > 0) {
       const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, storedWp);
-      // 문제 3: 노드 이동 시 endpoint 직각 보정
-      const reorth = reorthogonalizePath(raw, sPos, tPos);
-      return enforceStubs(reorth);
+      return enforceStubs(raw);
     }
-    if (isDragging) {
-      const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
-      return enforceStubs(avoidObstacles(raw, obstacles));
-    }
-    // A* 정밀
-    const aStar = findPathAStar(sourceX, sourceY, sPos, targetX, targetY, tPos, obstacles);
-    if (aStar && aStar.length >= 2) {
-      // 정규화 → 산 모양 단순화 → stub 강제 → 중간 waypoint 삽입
-      let route = normalizePath(aStar);
-      route = simplifyPath(route, obstacles);
-      route = enforceStubs(route);
-      route = insertMidWaypoints(route);
-      return route;
-    }
-    // 폴백
-    const raw = routePipe(sourceX, sourceY, sPos, targetX, targetY, tPos, []);
-    return enforceStubs(avoidObstacles(raw, obstacles));
+
+    // 결정론적 직교 라우팅 (드래그 중엔 장애물 회피 생략)
+    const route = routeOrthogonal(
+      sourceX, sourceY, sPos, targetX, targetY, tPos,
+      isDragging ? [] : obstacles
+    );
+    // IT 전용 긴 stub 적용 + 중간 waypoint
+    const stubbed = enforceStubs(route);
+    return isDragging ? stubbed : insertMidWaypoints(stubbed);
   }, [id, source, target, sourceX, sourceY, sourcePosition,
       targetX, targetY, targetPosition, storedWp, obstacles, isDragging]);
 
