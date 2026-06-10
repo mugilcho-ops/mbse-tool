@@ -403,10 +403,16 @@ const exportToExcel = async (nodes, edges) => {
       "Process 간 주요 영향인자":  influStr,
     };
     IT_CHECKLIST_CATEGORIES.forEach(cat => {
-      const v = cl[cat.key] || {};
-      row[`${cat.label} (공급)`]   = v.supplier || "";
-      row[`${cat.label} (주관)`]   = v.responsible || "";
-      row[`${cat.label} (내용)`]   = v.content || "";
+      const v = normalizeITChecklistCat(cl[cat.key]);
+      row[`${cat.label} (공급)`]     = v.supplier || "";
+      row[`${cat.label} (공급담당)`] = v.supplierOwner || "";
+      row[`${cat.label} (주관)`]     = v.responsible || "";
+      row[`${cat.label} (주관담당)`] = v.responsibleOwner || "";
+      // 항목 → "내용 [진행현황]" 줄바꿈 join (wrapText 셀, Alt+Enter로 항목 추가 가능)
+      row[`${cat.label} (내용)`]     = (v.items||[])
+        .filter(it => it.text.trim())
+        .map(it => it.status && it.status !== "확인 중" ? `${it.text} [${it.status}]` : `${it.text} [${it.status||"확인 중"}]`)
+        .join("\n");
     });
     row["Edge ID"] = e.id;
     itRows.push(row);
@@ -781,7 +787,9 @@ const exportToExcel = async (nodes, edges) => {
     "IT No.","IC&TI Description","Source Area","Target Area",
     "공급 구분별 Inter-connection","기능 운영간 Inter-connection","Process 간 주요 영향인자",
     ...IT_CHECKLIST_CATEGORIES.flatMap(cat => [
-      `${cat.label} (공급)`, `${cat.label} (주관)`, `${cat.label} (내용)`,
+      `${cat.label} (공급)`, `${cat.label} (공급담당)`,
+      `${cat.label} (주관)`, `${cat.label} (주관담당)`,
+      `${cat.label} (내용)`,
     ]),
     "Edge ID",
   ];
@@ -810,7 +818,7 @@ const exportToExcel = async (nodes, edges) => {
   wsIT["!cols"] = [
     {wch:8},{wch:32},{wch:18},{wch:18},
     {wch:30},{wch:36},{wch:30},
-    ...IT_CHECKLIST_CATEGORIES.flatMap(()=>[{wch:8},{wch:10},{wch:30}]),
+    ...IT_CHECKLIST_CATEGORIES.flatMap(()=>[{wch:8},{wch:12},{wch:10},{wch:12},{wch:32}]),
     {wch:24},
   ];
 
@@ -1486,17 +1494,28 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               }
             }
             // 체크리스트 카테고리별 (빈 셀은 기존 값 유지)
-            // 기본 구조와 merge → 신규 카테고리(배관 등)도 키 보장
-            const cl = { ...makeDefaultITChecklist(), ...(newData.checklist || {}) };
+            // v10.10: 신형식 정규화 + 담당자 컬럼 + 줄바꿈 → 개별 항목 파싱
+            const cl = {};
             IT_CHECKLIST_CATEGORIES.forEach(cat => {
-              const cur = cl[cat.key] || { supplier:"", responsible:"", content:"" };
-              const next = { ...cur };
-              const supV = pick(row, `${cat.label} (공급)`, "");
-              const resV = pick(row, `${cat.label} (주관)`, "");
-              const cntV = pick(row, `${cat.label} (내용)`, "");
-              if (supV.trim() !== "") next.supplier    = supV;
-              if (resV.trim() !== "") next.responsible = resV;
-              if (cntV.trim() !== "") next.content     = cntV;
+              const next = normalizeITChecklistCat(newData.checklist?.[cat.key]);
+              const supV  = pick(row, `${cat.label} (공급)`, "");
+              const supOV = pick(row, `${cat.label} (공급담당)`, "");
+              const resV  = pick(row, `${cat.label} (주관)`, "");
+              const resOV = pick(row, `${cat.label} (주관담당)`, "");
+              const cntV  = pick(row, `${cat.label} (내용)`, "");
+              if (supV.trim()  !== "") next.supplier         = supV;
+              if (supOV.trim() !== "") next.supplierOwner    = supOV;
+              if (resV.trim()  !== "") next.responsible      = resV;
+              if (resOV.trim() !== "") next.responsibleOwner = resOV;
+              if (cntV.trim()  !== "") {
+                // 줄바꿈(\n, \r\n) → 각 줄을 개별 항목으로, "내용 [진행현황]" 메타 파싱
+                next.items = cntV.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean)
+                  .map(s => {
+                    const m = s.match(/^(.*?)\s*\[([^\]]*)\]\s*$/);
+                    if (!m) return { text: s, status: "확인 중" };
+                    return { text: m[1].trim(), status: (m[2]||"").trim() || "확인 중" };
+                  });
+              }
               cl[cat.key] = next;
             });
             newData.checklist = cl;
@@ -1798,14 +1817,44 @@ const normalizeITFactor = (f) =>
   typeof f === "string"
     ? { text: f, status: "확인 중", owner: "" }
     : { text: f?.text || "", status: f?.status || "확인 중", owner: f?.owner || "" };
+
+// v10.10: 체크리스트 카테고리 정규화
+//  구버전 { supplier, responsible, content(문자열) }
+//  → 신버전 { supplier, supplierOwner, responsible, responsibleOwner, items:[{text,status}] }
+//  content 문자열은 줄바꿈 단위로 분해해 개별 항목으로 마이그레이션
+const normalizeITChecklistCat = (c) => {
+  if (!c) return { supplier:"ENC", supplierOwner:"", responsible:"TF조업", responsibleOwner:"", items:[] };
+  let items;
+  if (Array.isArray(c.items)) {
+    items = c.items.map(it =>
+      typeof it === "string"
+        ? { text: it, status: "확인 중" }
+        : { text: it?.text || "", status: it?.status || "확인 중" }
+    );
+  } else {
+    items = String(c.content || "").split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean)
+      .map(t => ({ text: t, status: "확인 중" }));
+  }
+  return {
+    supplier:         c.supplier || "",
+    supplierOwner:    c.supplierOwner || "",
+    responsible:      c.responsible || "",
+    responsibleOwner: c.responsibleOwner || "",
+    items,
+  };
+};
 // IT 라인 default checklist 구조
 const makeDefaultITChecklist = () => {
   const obj = {};
   IT_CHECKLIST_CATEGORIES.forEach(c => {
-    obj[c.key] = { supplier:"ENC", responsible:"TF조업", content:"" };
+    obj[c.key] = { supplier:"ENC", supplierOwner:"", responsible:"TF조업", responsibleOwner:"", items:[] };
   });
   return obj;
 };
+// 카테고리에 작성된 항목이 있는지 (신·구 형식 호환)
+const itCatHasContent = (c) =>
+  (Array.isArray(c?.items) && c.items.some(it => (it?.text||"").trim()))
+  || String(c?.content || "").trim().length > 0;
 
 
 const INSTR_TYPES     = ["Transmitter","Switch","Gauge"];
@@ -3721,7 +3770,7 @@ const ITEdge = ({
   // ── 체크리스트 진척 상태 색상 (라벨 테두리) ──────────────
   const cl = data?.checklist || {};
   const total = Object.keys(cl).length || 5;
-  const done  = Object.values(cl).filter(c => (c?.content||"").trim()).length;
+  const done  = Object.values(cl).filter(itCatHasContent).length; // 신·구 형식 호환
   const pct   = total > 0 ? done/total : 0;
   const statusColor = pct === 1 ? "#16a34a"
                     : pct > 0    ? "#f59e0b"
@@ -4757,8 +4806,12 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
     ).map(normalizeITFactor)
   );
   const [checklist, setChecklist] = useState(() => {
-    const def = makeDefaultITChecklist();
-    return d.checklist ? { ...def, ...d.checklist } : def;
+    // v10.10: 모든 카테고리를 신형식으로 정규화 (구버전 content → items 자동 마이그레이션)
+    const obj = {};
+    IT_CHECKLIST_CATEGORIES.forEach(c => {
+      obj[c.key] = normalizeITChecklistCat(d.checklist?.[c.key]);
+    });
+    return obj;
   });
   // 삭제 확인 다이얼로그
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -4766,13 +4819,18 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
   // 저장
   const handleSave = () => {
     const itNo = `IT-${itNoSuffix.trim() || "1"}`;
+    // 빈 항목 제거 후 저장
+    const cleanChecklist = {};
+    Object.entries(checklist).forEach(([k, c]) => {
+      cleanChecklist[k] = { ...c, items: (c.items||[]).filter(it => it.text.trim()) };
+    });
     onSave(edge.id, {
       itNo,
       description,
       supplyByArea,
       functionalDesc,
       influenceFactors: influenceFactors.filter(x => x.text.trim()),
-      checklist,
+      checklist: cleanChecklist,
     });
   };
 
@@ -4792,9 +4850,23 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
     setSupplyByArea(next);
   };
 
-  // 체크리스트 변경
+  // 체크리스트 변경 (카테고리 필드: supplier/supplierOwner/responsible/responsibleOwner)
   const updateChecklist = (catKey, field, v) => {
     setChecklist({ ...checklist, [catKey]: { ...checklist[catKey], [field]: v } });
+  };
+  // v10.10: 체크리스트 개별 항목 조작
+  const updateChecklistItem = (catKey, i, field, v) => {
+    const items = [...(checklist[catKey]?.items || [])];
+    items[i] = { ...items[i], [field]: v };
+    setChecklist({ ...checklist, [catKey]: { ...checklist[catKey], items } });
+  };
+  const addChecklistItem = (catKey) => {
+    const items = [...(checklist[catKey]?.items || []), { text:"", status:"확인 중" }];
+    setChecklist({ ...checklist, [catKey]: { ...checklist[catKey], items } });
+  };
+  const removeChecklistItem = (catKey, i) => {
+    const items = (checklist[catKey]?.items || []).filter((_, idx) => idx !== i);
+    setChecklist({ ...checklist, [catKey]: { ...checklist[catKey], items } });
   };
 
   // IT 라인 네비게이션
@@ -4979,44 +5051,86 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
 
             {/* 각 카테고리 */}
             {IT_CHECKLIST_CATEGORIES.map(cat => {
-              const cl = checklist[cat.key] || { supplier:"", responsible:"", content:"" };
-              const filled = (cl.content||"").trim().length > 0;
+              const cl = checklist[cat.key] || normalizeITChecklistCat(null);
+              const items = cl.items || [];
+              const filled = items.some(it => (it.text||"").trim());
               return (
                 <div key={cat.key} style={{
                   marginBottom:10, border:`1px solid ${cat.hdrFc}40`, borderRadius:6, overflow:"hidden",
                 }}>
-                  {/* 헤더 — 카테고리명 + 공급/주관 선택 + 작성 상태 */}
+                  {/* 헤더 1줄: 카테고리명 + 작성 상태 + 항목 추가 */}
                   <div style={{
                     padding:"6px 10px", background:cat.hdrBg, color:cat.hdrFc,
-                    display:"grid", gridTemplateColumns:"1.5fr 1fr 1.2fr auto",
-                    gap:8, alignItems:"center", fontSize:11, fontWeight:700,
+                    display:"flex", alignItems:"center", gap:8,
+                    fontSize:11, fontWeight:700,
                   }}>
-                    <span>{cat.label}</span>
+                    <span style={{ flex:1 }}>{cat.label}</span>
+                    <span style={{
+                      fontSize:9, padding:"1px 6px", borderRadius:3,
+                      background: filled ? "#16a34a" : "#cbd5e1", color:"#fff", fontWeight:700,
+                    }}>{filled ? `작성됨 ${items.filter(it=>it.text.trim()).length}건` : "미작성"}</span>
+                    <button onClick={()=>addChecklistItem(cat.key)} style={{
+                      background:cat.hdrFc, color:"#fff", border:"none", borderRadius:3,
+                      padding:"1px 7px", fontSize:9, cursor:"pointer", fontWeight:700,
+                    }}>+ 항목</button>
+                  </div>
+                  {/* 헤더 2줄: 공급 select + 담당자 / 주관 select + 담당자 */}
+                  <div style={{
+                    padding:"5px 10px", background:cat.hdrBg+"80",
+                    display:"grid", gridTemplateColumns:"auto 1fr auto 1fr",
+                    gap:6, alignItems:"center", fontSize:10,
+                    borderTop:`1px dashed ${cat.hdrFc}30`,
+                  }}>
                     <select value={cl.supplier} onChange={e=>updateChecklist(cat.key,"supplier",e.target.value)}
                       style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
                                fontSize:10, fontWeight:600, color:"#1e293b" }}>
                       <option value="">공급</option>
                       {IT_SUPPLIER_OPTIONS.map(x=><option key={x}>{x}</option>)}
                     </select>
+                    <input value={cl.supplierOwner||""} onChange={e=>updateChecklist(cat.key,"supplierOwner",e.target.value)}
+                      style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
+                               fontSize:10, color:"#1e293b", minWidth:0 }}
+                      placeholder="공급 담당자"/>
                     <select value={cl.responsible} onChange={e=>updateChecklist(cat.key,"responsible",e.target.value)}
                       style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
                                fontSize:10, fontWeight:600, color:"#1e293b" }}>
                       <option value="">주관</option>
                       {IT_RESPONSIBLE_OPTIONS.map(x=><option key={x}>{x}</option>)}
                     </select>
-                    <span style={{
-                      fontSize:9, padding:"1px 6px", borderRadius:3,
-                      background: filled ? "#16a34a" : "#cbd5e1", color:"#fff", fontWeight:700,
-                    }}>{filled ? "작성됨" : "미작성"}</span>
+                    <input value={cl.responsibleOwner||""} onChange={e=>updateChecklist(cat.key,"responsibleOwner",e.target.value)}
+                      style={{ padding:"2px 6px", borderRadius:3, border:"1px solid #cbd5e1",
+                               fontSize:10, color:"#1e293b", minWidth:0 }}
+                      placeholder="주관 담당자"/>
                   </div>
-                  {/* 내용 입력 */}
-                  <textarea value={cl.content} onChange={e=>updateChecklist(cat.key,"content",e.target.value)}
-                    style={{
-                      width:"100%", padding:"6px 10px", border:"none", borderTop:`1px dashed ${cat.hdrFc}40`,
-                      fontSize:11, resize:"vertical", minHeight:50, boxSizing:"border-box",
-                      fontFamily:"inherit", lineHeight:1.4, outline:"none",
-                    }}
-                    placeholder={`${cat.label} 관련 점검/논의 내용...`}/>
+                  {/* 항목 리스트: 내용 + 진행현황 + 삭제 */}
+                  <div style={{ padding: items.length>0 ? "5px 10px 7px" : "0" }}>
+                    {items.length === 0 && (
+                      <div style={{ padding:"8px 10px", fontSize:10, color:"#94a3b8", fontStyle:"italic" }}>
+                        "+ 항목" 버튼으로 점검/논의 항목을 추가하세요
+                      </div>
+                    )}
+                    {items.map((it, i) => {
+                      const st = IT_FACTOR_STATUS.find(s => s.value === it.status) || IT_FACTOR_STATUS[0];
+                      return (
+                        <div key={i} style={{ display:"flex", gap:5, marginTop:i===0?2:4, alignItems:"center" }}>
+                          <span style={{ fontSize:10, color:cat.hdrFc, fontWeight:700, width:16 }}>{i+1}.</span>
+                          <input value={it.text} onChange={e=>updateChecklistItem(cat.key, i, "text", e.target.value)}
+                            style={{ flex:1, padding:"4px 7px", border:"1px solid #cbd5e1",
+                                     borderRadius:4, fontSize:10.5, boxSizing:"border-box", minWidth:0 }}
+                            placeholder={`${cat.label} 점검/논의 항목...`}/>
+                          <select value={it.status} onChange={e=>updateChecklistItem(cat.key, i, "status", e.target.value)}
+                            style={{ flex:"0 0 72px", padding:"4px 4px", borderRadius:4, fontSize:10,
+                                     fontWeight:700, color:st.color, border:`1px solid ${st.color}80` }}>
+                            {IT_FACTOR_STATUS.map(s=><option key={s.value} value={s.value}>{s.value}</option>)}
+                          </select>
+                          <button onClick={()=>removeChecklistItem(cat.key, i)} style={{
+                            background:"none", border:"none", color:"#dc2626", cursor:"pointer",
+                            fontSize:13, padding:"0 3px",
+                          }}>×</button>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               );
             })}
@@ -6798,7 +6912,7 @@ const CanvasInner = () => {
                 ) : list.map(({edge, otherName}) => {
                   const cl = edge.data?.checklist || {};
                   const total = Object.keys(cl).length || 5;
-                  const done = Object.values(cl).filter(c => (c?.content||"").trim()).length;
+                  const done = Object.values(cl).filter(itCatHasContent).length;
                   const pct = total > 0 ? done/total : 0;
                   const statusColor = pct === 1 ? "#16a34a" : pct > 0 ? "#f59e0b" : "#94a3b8";
                   return (
