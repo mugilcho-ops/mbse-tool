@@ -383,8 +383,12 @@ const exportToExcel = async (nodes, edges) => {
     // 공급 구분별 → "AreaA:공급처A / AreaB:공급처B"
     const supplyStr = (d.supplyByArea||[])
       .map(s => `${s.areaName}: ${s.supplier}`).join(" / ");
-    // 영향인자 → "; " 로 join
-    const influStr = (d.influenceFactors||[]).join("; ");
+    // 영향인자 → "내용 [진행현황|담당자]" 형식으로 "; " join (구버전 문자열 호환)
+    const influStr = (d.influenceFactors||[]).map(f => {
+      const n = typeof f === "string" ? { text:f, status:"확인 중", owner:"" } : f;
+      const meta = [n.status, n.owner].filter(Boolean).join("|");
+      return meta ? `${n.text} [${meta}]` : n.text;
+    }).join("; ");
     // 체크리스트 카테고리별 펼치기
     const cl = d.checklist || {};
     const row = {
@@ -1443,7 +1447,14 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             // 영향인자 → "; " 또는 "\n" split
             if ("Process 간 주요 영향인자" in row) {
               const str = pick(row, "Process 간 주요 영향인자", "");
-              newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean);
+              // "내용 [진행현황|담당자]" 형식 역파싱 (메타 없으면 기본값)
+              newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean)
+                .map(s => {
+                  const m = s.match(/^(.*?)\s*\[([^\]]*)\]\s*$/);
+                  if (!m) return { text: s, status: "확인 중", owner: "" };
+                  const [st, ow] = m[2].split("|").map(x=>(x||"").trim());
+                  return { text: m[1].trim(), status: st || "확인 중", owner: ow || "" };
+                });
             }
             // 체크리스트 카테고리별
             const cl = { ...(newData.checklist || makeDefaultITChecklist()) };
@@ -1742,9 +1753,21 @@ const IT_CHECKLIST_CATEGORIES = [
   { key:"supply",  label:"장치 공급구분",      hdrBg:"#FEF3C7", hdrFc:"#92400E" },
   { key:"process", label:"Process",            hdrBg:"#DBEAFE", hdrFc:"#1E40AF" },
   { key:"mech",    label:"장치사양 (기계)",    hdrBg:"#FED7AA", hdrFc:"#9A3412" },
+  { key:"piping",  label:"장치사양 (배관)",    hdrBg:"#CFFAFE", hdrFc:"#155E75" },
   { key:"refrac",  label:"장치사양 (내화물)",  hdrBg:"#FBCFE8", hdrFc:"#831843" },
   { key:"eic",     label:"장치사양 (EIC)",     hdrBg:"#BBF7D0", hdrFc:"#14532D" },
 ];
+// v10.9: 영향인자 진행현황 옵션 + 상태 색상
+const IT_FACTOR_STATUS = [
+  { value:"확인 중", color:"#f59e0b" },
+  { value:"완료",    color:"#16a34a" },
+  { value:"변경 중", color:"#dc2626" },
+];
+// 영향인자 정규화: 구버전(문자열) → 신버전({text,status,owner}) 호환
+const normalizeITFactor = (f) =>
+  typeof f === "string"
+    ? { text: f, status: "확인 중", owner: "" }
+    : { text: f?.text || "", status: f?.status || "확인 중", owner: f?.owner || "" };
 // IT 라인 default checklist 구조
 const makeDefaultITChecklist = () => {
   const obj = {};
@@ -4697,7 +4720,12 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
     { areaName: targetName, supplier: "P-ENC" },
   ]);
   const [functionalDesc, setFunctionalDesc] = useState(d.functionalDesc || "");
-  const [influenceFactors, setInfluenceFactors] = useState(d.influenceFactors || [""]);
+  // v10.9: 영향인자 = {text, status, owner} 객체 (구버전 문자열 자동 변환)
+  const [influenceFactors, setInfluenceFactors] = useState(() =>
+    (d.influenceFactors && d.influenceFactors.length > 0
+      ? d.influenceFactors : [""]
+    ).map(normalizeITFactor)
+  );
   const [checklist, setChecklist] = useState(() => {
     const def = makeDefaultITChecklist();
     return d.checklist ? { ...def, ...d.checklist } : def;
@@ -4713,18 +4741,18 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
       description,
       supplyByArea,
       functionalDesc,
-      influenceFactors: influenceFactors.filter(x => x.trim()),
+      influenceFactors: influenceFactors.filter(x => x.text.trim()),
       checklist,
     });
   };
 
-  // 영향인자 추가/삭제
-  const updateFactor = (i, v) => {
+  // 영향인자 추가/삭제/필드수정
+  const updateFactor = (i, field, v) => {
     const next = [...influenceFactors];
-    next[i] = v;
+    next[i] = { ...next[i], [field]: v };
     setInfluenceFactors(next);
   };
-  const addFactor = () => setInfluenceFactors([...influenceFactors, ""]);
+  const addFactor = () => setInfluenceFactors([...influenceFactors, { text:"", status:"확인 중", owner:"" }]);
   const removeFactor = (i) => setInfluenceFactors(influenceFactors.filter((_, idx) => idx !== i));
 
   // 공급 구분별 변경
@@ -4857,17 +4885,31 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
                   padding:"2px 8px", fontSize:10, cursor:"pointer", fontWeight:700,
                 }}>+ 추가</button>
               </div>
-              {influenceFactors.map((f, i) => (
-                <div key={i} style={{ display:"flex", gap:5, marginBottom:4, alignItems:"center" }}>
-                  <span style={{ fontSize:11, color:"#7c3aed", fontWeight:700, width:18 }}>{i+1}.</span>
-                  <input value={f} onChange={e=>updateFactor(i, e.target.value)}
-                    style={{ ...inputS, flex:1 }} placeholder="영향인자 (예: HyREX TUF 가동 여부 확인)"/>
-                  <button onClick={()=>removeFactor(i)} style={{
-                    background:"none", border:"none", color:"#dc2626", cursor:"pointer",
-                    fontSize:14, padding:"0 4px",
-                  }}>×</button>
-                </div>
-              ))}
+              {influenceFactors.map((f, i) => {
+                const st = IT_FACTOR_STATUS.find(s => s.value === f.status) || IT_FACTOR_STATUS[0];
+                return (
+                  <div key={i} style={{ display:"flex", gap:5, marginBottom:4, alignItems:"center" }}>
+                    <span style={{ fontSize:11, color:"#7c3aed", fontWeight:700, width:18 }}>{i+1}.</span>
+                    <input value={f.text} onChange={e=>updateFactor(i, "text", e.target.value)}
+                      style={{ ...inputS, flex:2.2 }} placeholder="영향인자 (예: HyREX TUF 가동 여부 확인)"/>
+                    {/* 진행현황 — 상태별 색상 표시 */}
+                    <select value={f.status} onChange={e=>updateFactor(i, "status", e.target.value)}
+                      style={{
+                        ...inputS, flex:"0 0 76px", fontWeight:700,
+                        color: st.color, borderColor: st.color+"80",
+                      }}>
+                      {IT_FACTOR_STATUS.map(s=><option key={s.value} value={s.value}>{s.value}</option>)}
+                    </select>
+                    {/* 담당자 — 추진반/ENC/DX 조직별 1~2명 키인 */}
+                    <input value={f.owner} onChange={e=>updateFactor(i, "owner", e.target.value)}
+                      style={{ ...inputS, flex:1.2 }} placeholder="담당자 (예: 추진반 홍길동)"/>
+                    <button onClick={()=>removeFactor(i)} style={{
+                      background:"none", border:"none", color:"#dc2626", cursor:"pointer",
+                      fontSize:14, padding:"0 4px",
+                    }}>×</button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -4887,7 +4929,21 @@ const ITLineModal = ({ edge, nodes, allITEdges, onSave, onClose, onNavigate, onD
               <div><b style={{ color:"#7c3aed" }}>Description.</b> {IT_DESC}</div>
               <div style={{ marginTop:4 }}>
                 <b style={{ color:"#7c3aed" }}>주요 영향인자:</b>{" "}
-                {influenceFactors.filter(f=>f.trim()).join(" · ") || <i style={{color:"#94a3b8"}}>입력 필요</i>}
+                {influenceFactors.filter(f=>f.text.trim()).length === 0
+                  ? <i style={{color:"#94a3b8"}}>입력 필요</i>
+                  : influenceFactors.filter(f=>f.text.trim()).map((f, i) => {
+                      const st = IT_FACTOR_STATUS.find(s=>s.value===f.status) || IT_FACTOR_STATUS[0];
+                      return (
+                        <span key={i} style={{ display:"inline-flex", alignItems:"center", gap:3, marginRight:8 }}>
+                          {f.text}
+                          <span style={{
+                            fontSize:9, fontWeight:700, color:"#fff", background:st.color,
+                            borderRadius:3, padding:"0 4px",
+                          }}>{f.status}</span>
+                          {f.owner && <span style={{ fontSize:10, color:"#64748b" }}>({f.owner})</span>}
+                        </span>
+                      );
+                    })}
               </div>
             </div>
 
@@ -5081,7 +5137,9 @@ const SearchModal = ({ nodes, edges, onSelect, onClose }) => {
           label: d.itNo || "IT-?",
           sub: desc,
           icon: "🔗",
-          fields: [d.itNo, d.description, d.functionalDesc, ...(d.influenceFactors||[]), desc].filter(Boolean),
+          fields: [d.itNo, d.description, d.functionalDesc,
+                   ...(d.influenceFactors||[]).map(f=>typeof f==="string"?f:(f?.text||"")),
+                   desc].filter(Boolean),
         });
       } else {
         // pipe / connection
@@ -6734,12 +6792,19 @@ const CanvasInner = () => {
                       </div>
                       <div style={{ flex:1, fontSize:12, color:"#1e293b" }}>
                         <div style={{ fontWeight:700 }}>↔ {otherName}</div>
-                        {(edge.data?.influenceFactors||[]).filter(f=>f.trim()).length > 0 && (
-                          <div style={{ fontSize:10.5, color:"#64748b", marginTop:2 }}>
-                            영향: {(edge.data.influenceFactors).filter(f=>f.trim()).join(" · ").slice(0,60)}
-                            {(edge.data.influenceFactors).filter(f=>f.trim()).join(" · ").length>60 ? "…":""}
-                          </div>
-                        )}
+                        {(() => {
+                          // 영향인자: 구버전(문자열)·신버전(객체) 모두 text 추출
+                          const texts = (edge.data?.influenceFactors||[])
+                            .map(f=>typeof f==="string"?f:(f?.text||""))
+                            .filter(t=>t.trim());
+                          if (texts.length === 0) return null;
+                          const joined = texts.join(" · ");
+                          return (
+                            <div style={{ fontSize:10.5, color:"#64748b", marginTop:2 }}>
+                              영향: {joined.slice(0,60)}{joined.length>60 ? "…":""}
+                            </div>
+                          );
+                        })()}
                       </div>
                       <div style={{
                         fontSize:10, color: statusColor, fontWeight:700,
