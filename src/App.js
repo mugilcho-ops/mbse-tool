@@ -1153,7 +1153,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             const e = updatedEdges[idx];
             const newData = { ...e.data };
             const apply = (key, dataKey) => {
-              if (key in row) newData[dataKey] = pick(row, key, "");
+              // v10.9: 빈 셀은 기존 값 유지 (엑셀 빈 칸이 앱 데이터를 지우는 것 방지)
+              if (!(key in row)) return;
+              const v = pick(row, key, "");
+              if (String(v).trim() === "") return;
+              newData[dataKey] = v;
             };
             apply("Line No.",       "serialNo");
             apply("Schedule",       "spec");
@@ -1194,7 +1198,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             const n = updatedNodes[idx];
             const newData = { ...n.data };
             const apply = (key, dataKey) => {
-              if (key in row) newData[dataKey] = pick(row, key, "");
+              // v10.9: 빈 셀은 기존 값 유지 (엑셀 빈 칸이 앱 데이터를 지우는 것 방지)
+              if (!(key in row)) return;
+              const v = pick(row, key, "");
+              if (String(v).trim() === "") return;
+              newData[dataKey] = v;
             };
             apply("Item No.",   "itemNo");
             apply("설비명",      "label");
@@ -1224,7 +1232,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             const e = updatedEdges[idx];
             const newData = { ...e.data };
             const apply = (key, dataKey) => {
-              if (key in row) newData[dataKey] = pick(row, key, "");
+              // v10.9: 빈 셀은 기존 값 유지 (엑셀 빈 칸이 앱 데이터를 지우는 것 방지)
+              if (!(key in row)) return;
+              const v = pick(row, key, "");
+              if (String(v).trim() === "") return;
+              newData[dataKey] = v;
             };
             apply("Line No.",         "serialNo");
             apply("Line Type",        "lineType");
@@ -1352,7 +1364,11 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             };
             const newData = { ...n.data };
             const apply = (key, dataKey) => {
-              if (key in row) newData[dataKey] = pick(row, key, "");
+              // v10.9: 빈 셀은 기존 값 유지 (엑셀 빈 칸이 앱 데이터를 지우는 것 방지)
+              if (!(key in row)) return;
+              const v = pick(row, key, "");
+              if (String(v).trim() === "") return;
+              newData[dataKey] = v;
             };
             apply("WBS Code", "wbsCode");
             apply("Team", "teamId");
@@ -1413,21 +1429,29 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
           let matched = 0, unmatched = 0;
           rows.forEach(row => {
             const edgeId = pick(row, "Edge ID", "").trim();
-            const itNo   = pick(row, "IT No.", "");
-            // itEdge만 대상
-            const itCandidate = updatedEdges.find(e =>
+            const itNo   = pick(row, "IT No.", "").trim();
+            // v10.9: 빈 행 가드 — edgeId/itNo 둘 다 없으면 skip
+            //  ("".endsWith() 가 항상 true 라서 빈 행이 첫 IT 라인에
+            //   오매칭되어 데이터를 빈 값으로 덮어쓰던 버그 수정)
+            if (!edgeId && !itNo) return;
+            // itEdge만 대상 — edgeId 있을 때만 suffix 매칭 허용
+            const itCandidate = edgeId ? updatedEdges.find(e =>
               e.type === "itEdge" && (e.id === edgeId || edgeId.endsWith(e.id) || e.id.endsWith(edgeId))
-            );
-            // edgeId 매칭 실패 시 IT No. 로 fallback
-            const edge = itCandidate || updatedEdges.find(e =>
+            ) : null;
+            // edgeId 매칭 실패 시 IT No. 로 fallback (비어있지 않을 때만)
+            const edge = itCandidate || (itNo ? updatedEdges.find(e =>
               e.type === "itEdge" && (e.data?.itNo === itNo)
-            );
-            if (!edge) { if (edgeId || itNo) unmatched++; return; }
+            ) : null);
+            if (!edge) { unmatched++; return; }
             const idx = updatedEdges.findIndex(e => e.id === edge.id);
             const e = updatedEdges[idx];
             const newData = { ...e.data };
             const apply = (key, dataKey) => {
-              if (key in row) newData[dataKey] = pick(row, key, "");
+              // v10.9: 빈 셀은 기존 값 유지 (엑셀 빈 칸이 앱 데이터를 지우는 것 방지)
+              if (!(key in row)) return;
+              const v = pick(row, key, "");
+              if (String(v).trim() === "") return;
+              newData[dataKey] = v;
             };
             apply("IT No.", "itNo");
             apply("기능 운영간 Inter-connection", "functionalDesc");
@@ -1444,29 +1468,32 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
                 });
               }
             }
-            // 영향인자 → "; " 또는 "\n" split
+            // 영향인자 → "; " 또는 "\n" split (빈 셀이면 기존 값 유지)
             if ("Process 간 주요 영향인자" in row) {
               const str = pick(row, "Process 간 주요 영향인자", "");
-              // "내용 [진행현황|담당자]" 형식 역파싱 (메타 없으면 기본값)
-              newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean)
-                .map(s => {
-                  const m = s.match(/^(.*?)\s*\[([^\]]*)\]\s*$/);
-                  if (!m) return { text: s, status: "확인 중", owner: "" };
-                  const [st, ow] = m[2].split("|").map(x=>(x||"").trim());
-                  return { text: m[1].trim(), status: st || "확인 중", owner: ow || "" };
-                });
+              if (str.trim() !== "") {
+                // "내용 [진행현황|담당자]" 형식 역파싱 (메타 없으면 기본값)
+                newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean)
+                  .map(s => {
+                    const m = s.match(/^(.*?)\s*\[([^\]]*)\]\s*$/);
+                    if (!m) return { text: s, status: "확인 중", owner: "" };
+                    const [st, ow] = m[2].split("|").map(x=>(x||"").trim());
+                    return { text: m[1].trim(), status: st || "확인 중", owner: ow || "" };
+                  });
+              }
             }
-            // 체크리스트 카테고리별
-            const cl = { ...(newData.checklist || makeDefaultITChecklist()) };
+            // 체크리스트 카테고리별 (빈 셀은 기존 값 유지)
+            // 기본 구조와 merge → 신규 카테고리(배관 등)도 키 보장
+            const cl = { ...makeDefaultITChecklist(), ...(newData.checklist || {}) };
             IT_CHECKLIST_CATEGORIES.forEach(cat => {
               const cur = cl[cat.key] || { supplier:"", responsible:"", content:"" };
               const next = { ...cur };
-              const supK = `${cat.label} (공급)`;
-              const resK = `${cat.label} (주관)`;
-              const cntK = `${cat.label} (내용)`;
-              if (supK in row) next.supplier    = pick(row, supK, "");
-              if (resK in row) next.responsible = pick(row, resK, "");
-              if (cntK in row) next.content     = pick(row, cntK, "");
+              const supV = pick(row, `${cat.label} (공급)`, "");
+              const resV = pick(row, `${cat.label} (주관)`, "");
+              const cntV = pick(row, `${cat.label} (내용)`, "");
+              if (supV.trim() !== "") next.supplier    = supV;
+              if (resV.trim() !== "") next.responsible = resV;
+              if (cntV.trim() !== "") next.content     = cntV;
               cl[cat.key] = next;
             });
             newData.checklist = cl;
