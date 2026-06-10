@@ -1,15 +1,15 @@
 {
   "files": {
     "main.css": "/mbse-tool/static/css/main.616ba065.css",
-    "main.js": "/mbse-tool/static/js/main.b4e23602.js",
+    "main.js": "/mbse-tool/static/js/main.e7b7f1fc.js",
     "static/js/453.18a96552.chunk.js": "/mbse-tool/static/js/453.18a96552.chunk.js",
     "index.html": "/mbse-tool/index.html",
     "main.616ba065.css.map": "/mbse-tool/static/css/main.616ba065.css.map",
-    "main.b4e23602.js.map": "/mbse-tool/static/js/main.b4e23602.js.map",
+    "main.e7b7f1fc.js.map": "/mbse-tool/static/js/main.e7b7f1fc.js.map",
     "453.18a96552.chunk.js.map": "/mbse-tool/static/js/453.18a96552.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.616ba065.css",
-    "static/js/main.b4e23602.js"
+    "static/js/main.e7b7f1fc.js"
   ]
 }
