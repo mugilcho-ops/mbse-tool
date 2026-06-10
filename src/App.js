@@ -384,11 +384,13 @@ const exportToExcel = async (nodes, edges) => {
     const supplyStr = (d.supplyByArea||[])
       .map(s => `${s.areaName}: ${s.supplier}`).join(" / ");
     // 영향인자 → "내용 [진행현황|담당자]" 형식으로 "; " join (구버전 문자열 호환)
+    // 영향인자 → "내용 [진행현황|담당자]" 형식, 셀 내 줄바꿈(\n)으로 구분
+    // (wrapText 셀이라 엑셀에서 항목별 줄로 표시 — Alt+Enter로 항목 추가/구분 가능)
     const influStr = (d.influenceFactors||[]).map(f => {
       const n = typeof f === "string" ? { text:f, status:"확인 중", owner:"" } : f;
       const meta = [n.status, n.owner].filter(Boolean).join("|");
       return meta ? `${n.text} [${meta}]` : n.text;
-    }).join("; ");
+    }).join("\n");
     // 체크리스트 카테고리별 펼치기
     const cl = d.checklist || {};
     const row = {
@@ -1473,7 +1475,8 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               const str = pick(row, "Process 간 주요 영향인자", "");
               if (str.trim() !== "") {
                 // "내용 [진행현황|담당자]" 형식 역파싱 (메타 없으면 기본값)
-                newData.influenceFactors = str.split(/[;\n]/).map(s=>s.trim()).filter(Boolean)
+                // 줄바꿈(\n, \r\n) 또는 세미콜론으로 구분 → 각각 별개 영향인자
+                newData.influenceFactors = str.split(/[;\n\r]+/).map(s=>s.trim()).filter(Boolean)
                   .map(s => {
                     const m = s.match(/^(.*?)\s*\[([^\]]*)\]\s*$/);
                     if (!m) return { text: s, status: "확인 중", owner: "" };
