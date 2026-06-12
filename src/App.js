@@ -6059,6 +6059,33 @@ const CanvasInner = () => {
   const { screenToFlowPosition, fitView, setCenter, getZoom }=useReactFlow();
   const [nodes,setNodes,onNodesChange]=useNodesState([]);
   const [edges,setEdges,onEdgesChange]=useEdgesState([]);
+  // ══════════════════════════════════════════════════════════
+  // v10.13: PJT 메타 (PEM/EM·권한·Revision·변경 Log)
+  // ══════════════════════════════════════════════════════════
+  const [projectMeta, setProjectMeta] = useState({
+    pem: "", ems: [], revision: 0,
+    permissions: { specImport: [], modelEdit: [], itEdit: [] },
+    changeLog: [],
+  });
+  const [currentUser, setCurrentUser] = useState(
+    () => localStorage.getItem("mbse_current_user") || ""
+  );
+  const [showPjtPanel, setShowPjtPanel] = useState(false);
+  const [showLogModal, setShowLogModal] = useState(false);
+
+  // 권한 판정: PJT 미설정(PEM 없음)이면 모두 허용 (기존 사용성 유지)
+  // PEM/EM은 전 카테고리 자동 보유, 그 외는 카테고리별 부여 목록 확인
+  const hasPerm = useCallback((cat) => {
+    if (!projectMeta.pem) return true; // PJT 권한 미설정 상태
+    const u = (currentUser || "").trim();
+    if (!u) return false;
+    if (u === projectMeta.pem || (projectMeta.ems || []).includes(u)) return true;
+    return (projectMeta.permissions?.[cat] || []).includes(u);
+  }, [projectMeta, currentUser]);
+
+  const denyMsg = (what) =>
+    alert(`⛔ ${what} 권한이 없습니다.\n현재 사용자: ${currentUser || "(미설정)"}\n우측 하단 👥 권한 패널에서 사용자 설정 또는 PEM/EM에게 권한을 요청하세요.`);
+
   const [sel,setSel]       = useState(null);
   const [modal,setModal]   = useState(false);
   const [modalDefault,setModalDefault] = useState("Piping");
@@ -6549,33 +6576,6 @@ const CanvasInner = () => {
       }));
     }
   }, [nodes, setNodes]);
-
-  // ══════════════════════════════════════════════════════════
-  // v10.13: PJT 메타 (PEM/EM·권한·Revision·변경 Log)
-  // ══════════════════════════════════════════════════════════
-  const [projectMeta, setProjectMeta] = useState({
-    pem: "", ems: [], revision: 0,
-    permissions: { specImport: [], modelEdit: [], itEdit: [] },
-    changeLog: [],
-  });
-  const [currentUser, setCurrentUser] = useState(
-    () => localStorage.getItem("mbse_current_user") || ""
-  );
-  const [showPjtPanel, setShowPjtPanel] = useState(false);
-  const [showLogModal, setShowLogModal] = useState(false);
-
-  // 권한 판정: PJT 미설정(PEM 없음)이면 모두 허용 (기존 사용성 유지)
-  // PEM/EM은 전 카테고리 자동 보유, 그 외는 카테고리별 부여 목록 확인
-  const hasPerm = useCallback((cat) => {
-    if (!projectMeta.pem) return true; // PJT 권한 미설정 상태
-    const u = (currentUser || "").trim();
-    if (!u) return false;
-    if (u === projectMeta.pem || (projectMeta.ems || []).includes(u)) return true;
-    return (projectMeta.permissions?.[cat] || []).includes(u);
-  }, [projectMeta, currentUser]);
-
-  const denyMsg = (what) =>
-    alert(`⛔ ${what} 권한이 없습니다.\n현재 사용자: ${currentUser || "(미설정)"}\n우측 하단 👥 권한 패널에서 사용자 설정 또는 PEM/EM에게 권한을 요청하세요.`);
 
   // ── 사양서 적용 (v10.13: 최초 생성 / 수정 반영 분기) ──────
   const FBR_CODE_TO_TYPE = useMemo(
