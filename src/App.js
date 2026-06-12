@@ -1725,45 +1725,93 @@ const normalizeAreaZIndex = (nodes) => {
   });
 };
 // Equipment 카테고리 분리
-const EQUIPMENT_UT = [
-  "Tank","Pump","Pond","Heat Exchanger","Filter","Hopper","Decanter",
-  "Cooling Tower","Clarifier","Classifier","Feed Box","Chemical Dosing",
-  "Gas Duct","Steel Structure",
-];
-const EQUIPMENT_ME = [
-  "Reactor","Scrubber","Bag Filter","Feed Bin",
-  "Bucket Elev.","Compressor","Fan","Stand Pipe","Bubbler",
-  "Riser","Pnumatic Conv.","Conveyor","Machine","Structure","Hot Duct",
-];
-// ── v10.11: HyREX FBR Equipment 코드 체계 대표 Block ─────────
+// (v10.14: EQUIPMENT_UT / EQUIPMENT_ME 는 FBR Code 카탈로그로 통합됨 — EQUIPMENT_LEGACY 참조)
+// ── v10.14: HyREX FBR Equipment 코드 체계 — UT/ME 통합 단일 카탈로그 ──
 // Equipment List의 코드 패턴(숫자+알파벳+숫자)에서 알파벳 = 장비 종류
-// 예: 232A11 → A(Reactor), 8291P01 → P(Pump), 224G11 → G(Valve)
+// 하나의 코드에 복수 Block 허용 (예: B → Bin/Vessel, Tank, Pond...)
 const EQUIPMENT_FBR = [
-  { code:"A", type:"Reactor"        },  // Reactor 1~4, N2-PSA
-  { code:"B", type:"Bin/Vessel"     },  // Bin, Lock hopper, Tank, Pond, Pot
-  { code:"C", type:"Compressor/Fan" },  // RGC, N2 compressor, Fan, Dampener
-  { code:"D", type:"Cyclone/Scrubber"}, // Cyclone, Venturi, Demister, Classifier
-  { code:"E", type:"KO Drum"        },  // Knock-out drum, Packing
-  { code:"F", type:"Feeder"         },  // Screw/Rotary feeder, Screw conveyor
-  { code:"G", type:"Valve/Gate"     },  // Dome/Ball valve, Slide gate, Goggle
-  { code:"H", type:"Heat Exchanger" },  // HX, Cooler, Cooling tower
-  { code:"J", type:"Burner/Nozzle"  },  // Burner, Combustion chamber, Dosing
-  { code:"K", type:"Bag Filter"     },  // Bag filter, Hot dedusting filter
-  { code:"L", type:"Compensator"    },  // Compensator, Standpipe, Riser, Duct
-  { code:"M", type:"Mech. Filter"   },  // Mechanical bypass filter, Shower
-  { code:"N", type:"Special Device" },  // Vibrator, Sampler, Flare, Decanter
-  { code:"P", type:"Pump"           },  // 각종 Pump
-  { code:"Q", type:"Hydraulic Unit" },  // Hydraulic unit/piping
-  { code:"R", type:"Refractory"     },  // 내화물 (Reactor/Duct lining)
-  { code:"T", type:"Grid/Internals" },  // Steel grid, Reheat burner
-  { code:"U", type:"Chute"          },  // Diverter/Dust/Cleaning chute
-  { code:"X", type:"Crane/Hoist"    },  // Crane, Hoist, Elevator
-  { code:"Y", type:"Structure/Stack"},  // Steel structure, Building, Stack
-  { code:"Z", type:"Foundation"     },  // Foundation, 기초
+  // A — Reactor (주요 반응장치)
+  { code:"A", type:"Reactor"        },
+  // B — Bin / Vessel / 저장조류
+  { code:"B", type:"Bin/Vessel"     },
+  { code:"B", type:"Tank"           },
+  { code:"B", type:"Pond"           },
+  { code:"B", type:"Hopper"         },
+  { code:"B", type:"Feed Bin"       },
+  { code:"B", type:"Feed Box"       },
+  { code:"B", type:"Pit"            },
+  // C — Compressor / Fan + Concrete Structure
+  { code:"C", type:"Compressor"     },
+  { code:"C", type:"Fan"            },
+  { code:"C", type:"Conc. Struc."   },
+  // D — 분리기류 (Cyclone/Scrubber/Clarifier...)
+  { code:"D", type:"Cyclone"        },
+  { code:"D", type:"Scrubber"       },
+  { code:"D", type:"Decanter"       },
+  { code:"D", type:"Clarifier"      },
+  { code:"D", type:"Classifier"     },
+  { code:"D", type:"Drum Screen"    },
+  { code:"D", type:"Bubbler"        },
+  // E — Knock-out Drum / Packing
+  { code:"E", type:"KO Drum"        },
+  // F — Feeder / 이송설비
+  { code:"F", type:"Feeder"         },
+  { code:"F", type:"Conveyor"       },
+  { code:"F", type:"Bucket Elev."   },
+  { code:"F", type:"Pnumatic Conv." },
+  // G — Valve / Gate
+  { code:"G", type:"Valve/Gate"     },
+  // H — Heat Exchanger / Cooling
+  { code:"H", type:"Heat Exchanger" },
+  { code:"H", type:"Cooling Tower"  },
+  // J — Burner / Dosing
+  { code:"J", type:"Burner/Nozzle"  },
+  { code:"J", type:"Chemical Dosing"},
+  // K — 집진 Filter
+  { code:"K", type:"Bag Filter"     },
+  // L — 배관류 (Compensator/Duct/Pipe)
+  { code:"L", type:"Compensator"    },
+  { code:"L", type:"Stand Pipe"     },
+  { code:"L", type:"Riser"          },
+  { code:"L", type:"Gas Duct"       },
+  { code:"L", type:"Hot Duct"       },
+  // M — Mechanical Filter / Machine
+  { code:"M", type:"Mech. Filter"   },
+  { code:"M", type:"Filter"         },
+  { code:"M", type:"Machine"        },
+  // N — Special Device
+  { code:"N", type:"Special Device" },
+  // P — Pump
+  { code:"P", type:"Pump"           },
+  // Q — Hydraulic Unit
+  { code:"Q", type:"Hydraulic Unit" },
+  // R — Refractory
+  { code:"R", type:"Refractory"     },
+  // T — Grid / Internals
+  { code:"T", type:"Grid/Internals" },
+  // U — Chute
+  { code:"U", type:"Chute"          },
+  // X — Crane / Hoist
+  { code:"X", type:"Crane/Hoist"    },
+  // Y — Steel Structure (Tower/Room/Pipe Rack/Stack 분류)
+  { code:"Y", type:"Tower Struc."   },
+  { code:"Y", type:"Room Struc."    },
+  { code:"Y", type:"Pipe Rack"      },
+  { code:"Y", type:"Stack"          },
+  // Z — Foundation
+  { code:"Z", type:"Foundation"     },
+];
+// 레거시 호환: 기존 모델에 배치된 구버전 타입명 (Inspector select 등에서 인식)
+const EQUIPMENT_LEGACY = [
+  "Decanter","Clarifier","Classifier","Feed Box","Chemical Dosing","Gas Duct",
+  "Steel Structure","Structure","Scrubber","Feed Bin","Bucket Elev.","Compressor",
+  "Fan","Stand Pipe","Bubbler","Riser","Pnumatic Conv.","Conveyor","Machine",
+  "Hot Duct","Tank","Pump","Pond","Heat Exchanger","Filter","Hopper","Cooling Tower",
+  "Compressor/Fan","Cyclone/Scrubber","Structure/Stack",
 ];
 const EQUIPMENT_LIST = [...new Set([
-  ...EQUIPMENT_UT, ...EQUIPMENT_ME,
   ...EQUIPMENT_FBR.map(f => f.type),
+  ...EQUIPMENT_LEGACY,
 ])];
 
 // ── Connection 타입 ──────────────────────────────────────────
@@ -2135,11 +2183,11 @@ const uid = (p="n") => `${p}_${Date.now()}_${_idCnt++}`;
 // MINI SVG ICONS
 // ─────────────────────────────────────────────────────────────
 const ICONS = {
-  Tank:           <><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="3" y1="17" x2="21" y2="17" stroke="currentColor" strokeWidth="1.5"/></>,
+  Tank:           <><path d="M5,6 Q5,3.5 12,3.5 Q19,3.5 19,6 L19,18 Q19,20.5 12,20.5 Q5,20.5 5,18 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M5,6 Q5,8.5 12,8.5 Q19,8.5 19,6" fill="none" stroke="currentColor" strokeWidth="0.9"/><line x1="7" y1="15" x2="17" y2="15" stroke="currentColor" strokeWidth="0.9" strokeDasharray="2 1.2"/></>,
   Pump:           <><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><polygon points="12,5 19,12 12,19 5,12" fill="none" stroke="currentColor" strokeWidth="1"/></>,
   "Heat Exchanger":<><rect x="3" y="7" width="18" height="10" rx="1" fill="none" stroke="currentColor" strokeWidth="1.5"/>{[7,11,15].map(x=><line key={x} x1={x} y1="7" x2={x} y2="17" stroke="currentColor" strokeWidth="1"/>)}</>,
-  Filter:         <><polygon points="3,3 21,3 15,21 9,21" fill="none" stroke="currentColor" strokeWidth="1.5"/></>,
-  "Cooling Tower":<><path d="M4,3 L20,3 L18,21 L6,21 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="3" x2="12" y2="21" stroke="currentColor" strokeWidth="1"/></>,
+  Filter:         <><polygon points="4,3 20,3 14.5,14 14.5,21 9.5,21 9.5,14" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="6.5" y1="7" x2="17.5" y2="7" stroke="currentColor" strokeWidth="0.9"/><line x1="8" y1="10.5" x2="16" y2="10.5" stroke="currentColor" strokeWidth="0.9"/></>,
+  "Cooling Tower":<><path d="M7,4 Q10,11 7.5,21 L16.5,21 Q14,11 17,4 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M9,2.5 Q10,1 11,2.5 M13,2.5 Q14,1 15,2.5" fill="none" stroke="currentColor" strokeWidth="0.9"/><line x1="9" y1="17" x2="15" y2="17" stroke="currentColor" strokeWidth="0.9" strokeDasharray="1.6 1"/></>,
   Brench:         <><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="2" y1="12" x2="8" y2="12" stroke="currentColor" strokeWidth="1.5"/><line x1="16" y1="12" x2="22" y2="12" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="2" x2="12" y2="8" stroke="currentColor" strokeWidth="1.5"/></>,
 
   // ── v10.11: HyREX FBR 코드 체계 대표 심볼 (P&ID 스타일) ──
@@ -2181,6 +2229,44 @@ const ICONS = {
   "Structure/Stack":<><path d="M9,21 L10,4 L14,4 L15,21" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="6" y1="21" x2="18" y2="21" stroke="currentColor" strokeWidth="1.5"/><path d="M10.5,8 Q12,6.5 13.5,8" fill="none" stroke="currentColor" strokeWidth="0.9"/><path d="M11,3 Q12,1.5 13,3" fill="none" stroke="currentColor" strokeWidth="0.9"/></>,
   // Z: 기초 — 패드 + 지반 해칭
   Foundation:     <><rect x="7" y="6" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="3" y1="17" x2="21" y2="17" stroke="currentColor" strokeWidth="1.8"/><line x1="5" y1="21" x2="8" y2="17" stroke="currentColor" strokeWidth="1"/><line x1="10" y1="21" x2="13" y2="17" stroke="currentColor" strokeWidth="1"/><line x1="15" y1="21" x2="18" y2="17" stroke="currentColor" strokeWidth="1"/></>,
+
+  // ── v10.14: UT/ME 통합 신규 심볼 ──
+  // B군 — 저장조류
+  Pond:           <><path d="M3,7 L6,18 L18,18 L21,7" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M5,10 Q8,8.6 11,10 Q14,11.4 17,10 Q18.5,9.3 19.5,10" fill="none" stroke="currentColor" strokeWidth="1.1"/></>,
+  Hopper:         <><path d="M4,4 L20,4 L14,16 L14,20 L10,20 L10,16 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="4" y1="4" x2="20" y2="4" stroke="currentColor" strokeWidth="1.5"/></>,
+  "Feed Bin":     <><path d="M6,3 L18,3 L18,12 L13.5,19 L10.5,19 L6,12 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="19" x2="12" y2="22" stroke="currentColor" strokeWidth="1.4"/><polygon points="12,22 10.6,19.8 13.4,19.8" fill="currentColor"/></>,
+  "Feed Box":     <><rect x="4" y="7" width="16" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="2" x2="12" y2="7" stroke="currentColor" strokeWidth="1.4"/><polygon points="12,7 10.7,4.9 13.3,4.9" fill="currentColor"/><line x1="7" y1="13" x2="17" y2="13" stroke="currentColor" strokeWidth="0.9" strokeDasharray="1.8 1.2"/></>,
+  Pit:            <><line x1="2" y1="7" x2="22" y2="7" stroke="currentColor" strokeWidth="1.6"/><path d="M6,7 L6,19 L18,19 L18,7" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="2.5" y1="4.5" x2="5" y2="7" stroke="currentColor" strokeWidth="0.9"/><line x1="8" y1="4.5" x2="10.5" y2="7" stroke="currentColor" strokeWidth="0.9"/><line x1="13.5" y1="4.5" x2="16" y2="7" stroke="currentColor" strokeWidth="0.9"/><line x1="19" y1="4.5" x2="21.5" y2="7" stroke="currentColor" strokeWidth="0.9"/></>,
+  // C군 — 회전기계 + 콘크리트
+  Compressor:     <><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M8,8 L16,10.5 L16,13.5 L8,16 Z" fill="none" stroke="currentColor" strokeWidth="1.2"/></>,
+  Fan:            <><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M12,12 Q14,7 12,4.8 M12,12 Q17,14 19.2,12 M12,12 Q10,17 12,19.2 M12,12 Q7,10 4.8,12" fill="none" stroke="currentColor" strokeWidth="1.2"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/></>,
+  "Conc. Struc.": <><rect x="4" y="5" width="16" height="14" fill="none" stroke="currentColor" strokeWidth="1.6"/><line x1="6" y1="19" x2="9.5" y2="5" stroke="currentColor" strokeWidth="0.8"/><line x1="10.5" y1="19" x2="14" y2="5" stroke="currentColor" strokeWidth="0.8"/><line x1="15" y1="19" x2="18.5" y2="5" stroke="currentColor" strokeWidth="0.8"/><circle cx="8" cy="9" r="0.8" fill="currentColor"/><circle cx="15.5" cy="13.5" r="0.8" fill="currentColor"/><circle cx="11" cy="16" r="0.8" fill="currentColor"/></>,
+  // D군 — 분리기류
+  Cyclone:        <><path d="M7,3 L17,3 L17,9 L12.8,21 L11.2,21 L7,9 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="3" x2="12" y2="6.5" stroke="currentColor" strokeWidth="1"/><line x1="3" y1="5" x2="7" y2="5" stroke="currentColor" strokeWidth="1.2"/></>,
+  Scrubber:       <><rect x="7" y="3" width="10" height="18" rx="3" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M9,8 L12,10 L15,8" fill="none" stroke="currentColor" strokeWidth="1"/><line x1="8.5" y1="13" x2="15.5" y2="13" stroke="currentColor" strokeWidth="0.9"/><line x1="8.5" y1="15.2" x2="15.5" y2="15.2" stroke="currentColor" strokeWidth="0.9"/><circle cx="10.5" cy="5.8" r="0.7" fill="currentColor"/><circle cx="13.5" cy="5.8" r="0.7" fill="currentColor"/></>,
+  Decanter:       <><path d="M3,9 L16,9 L21,12 L16,15 L3,15 Q1.8,12 3,9 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M5,9.8 Q7,12 5,14.2 M9,9.8 Q11,12 9,14.2 M13,9.8 Q15,12 13,14.2" fill="none" stroke="currentColor" strokeWidth="0.9"/></>,
+  Clarifier:      <><path d="M3,8 L21,8 L18,14 Q15.5,18 12,18 Q8.5,18 6,14 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="12" y1="4" x2="12" y2="14" stroke="currentColor" strokeWidth="1.2"/><line x1="8" y1="12.5" x2="16" y2="12.5" stroke="currentColor" strokeWidth="1"/></>,
+  Classifier:     <><path d="M3,16 L18,5 L21,7 L6,18 Z" fill="none" stroke="currentColor" strokeWidth="1.4"/><path d="M6.5,14.2 Q8,12.6 9.5,14 Q11,15.4 12.5,13.8 Q14,12.2 15.5,13.6" fill="none" stroke="currentColor" strokeWidth="0.9"/><line x1="3" y1="20" x2="12" y2="20" stroke="currentColor" strokeWidth="1.3"/></>,
+  "Drum Screen":  <><rect x="3" y="8" width="18" height="8" rx="4" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="7" y1="8.4" x2="7" y2="15.6" stroke="currentColor" strokeWidth="0.8"/><line x1="11" y1="8.4" x2="11" y2="15.6" stroke="currentColor" strokeWidth="0.8"/><line x1="15" y1="8.4" x2="15" y2="15.6" stroke="currentColor" strokeWidth="0.8"/><line x1="3.4" y1="12" x2="20.6" y2="12" stroke="currentColor" strokeWidth="0.8"/></>,
+  Bubbler:        <><path d="M6,4 L6,17 Q6,20 12,20 Q18,20 18,17 L18,4" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="5" y1="10" x2="19" y2="10" stroke="currentColor" strokeWidth="1"/><circle cx="10" cy="14" r="1.1" fill="none" stroke="currentColor" strokeWidth="0.8"/><circle cx="14" cy="16" r="1.1" fill="none" stroke="currentColor" strokeWidth="0.8"/><circle cx="12" cy="12.4" r="0.8" fill="none" stroke="currentColor" strokeWidth="0.8"/></>,
+  // F군 — 이송설비
+  Conveyor:       <><circle cx="6" cy="13" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.4"/><circle cx="18" cy="13" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.4"/><line x1="6" y1="9.6" x2="18" y2="9.6" stroke="currentColor" strokeWidth="1.4"/><line x1="6" y1="16.4" x2="18" y2="16.4" stroke="currentColor" strokeWidth="1.4"/></>,
+  "Bucket Elev.": <><rect x="8" y="3" width="8" height="18" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.5"/><rect x="10" y="6" width="4" height="2.6" fill="none" stroke="currentColor" strokeWidth="0.9"/><rect x="10" y="11" width="4" height="2.6" fill="none" stroke="currentColor" strokeWidth="0.9"/><rect x="10" y="16" width="4" height="2.6" fill="none" stroke="currentColor" strokeWidth="0.9"/><line x1="16" y1="5" x2="19.5" y2="5" stroke="currentColor" strokeWidth="1.2"/><polygon points="19.5,5 17.6,3.9 17.6,6.1" fill="currentColor"/></>,
+  "Pnumatic Conv.":<><path d="M2.5,12 L21.5,12" stroke="currentColor" strokeWidth="1.6"/><path d="M2.5,8.8 L21.5,8.8 M2.5,15.2 L21.5,15.2" stroke="currentColor" strokeWidth="1.2"/><circle cx="8" cy="12" r="1" fill="currentColor"/><circle cx="13" cy="12" r="1" fill="currentColor"/><polygon points="19.5,12 17.2,10.6 17.2,13.4" fill="currentColor"/></>,
+  // H군 — Chemical Dosing은 J군이지만 함께 배치
+  "Chemical Dosing":<><rect x="4" y="8" width="9" height="12" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.4"/><line x1="6" y1="12" x2="11" y2="12" stroke="currentColor" strokeWidth="0.9"/><circle cx="17.5" cy="14" r="3.4" fill="none" stroke="currentColor" strokeWidth="1.3"/><path d="M13,10 L17.5,14" stroke="currentColor" strokeWidth="1.1"/><path d="M17.5,5 Q19,7 17.5,8.6 Q16,7 17.5,5" fill="none" stroke="currentColor" strokeWidth="1"/></>,
+  // L군 — 배관류
+  "Stand Pipe":   <><line x1="12" y1="2.5" x2="12" y2="21.5" stroke="currentColor" strokeWidth="2.6"/><line x1="8.5" y1="6" x2="15.5" y2="6" stroke="currentColor" strokeWidth="1.3"/><line x1="8.5" y1="18" x2="15.5" y2="18" stroke="currentColor" strokeWidth="1.3"/></>,
+  Riser:          <><line x1="12" y1="21" x2="12" y2="5" stroke="currentColor" strokeWidth="2.6"/><polygon points="12,2.5 9.4,6.5 14.6,6.5" fill="currentColor"/><line x1="8.5" y1="13" x2="15.5" y2="13" stroke="currentColor" strokeWidth="1.2"/></>,
+  "Gas Duct":     <><rect x="2.5" y="8" width="19" height="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M6,12 L11,12 M13,12 L18,12" stroke="currentColor" strokeWidth="1"/><polygon points="19.5,12 17.4,10.8 17.4,13.2" fill="currentColor"/></>,
+  "Hot Duct":     <><rect x="2.5" y="9" width="19" height="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M7,7 Q8,5 7,3.2 M12,7 Q13,5 12,3.2 M17,7 Q18,5 17,3.2" fill="none" stroke="currentColor" strokeWidth="1"/><polygon points="19,13 16.9,11.8 16.9,14.2" fill="currentColor"/></>,
+  // M군
+  Machine:        <><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" strokeWidth="1.4"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/><path d="M12,5.2 L12,2.8 M12,21.2 L12,18.8 M5.2,12 L2.8,12 M21.2,12 L18.8,12 M7.2,7.2 L5.5,5.5 M16.8,7.2 L18.5,5.5 M7.2,16.8 L5.5,18.5 M16.8,16.8 L18.5,18.5" stroke="currentColor" strokeWidth="1.7"/></>,
+  // Y군 — 구조물 분류
+  "Tower Struc.": <><path d="M9.5,3 L14.5,3 L17.5,21 L6.5,21 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M8.6,8.5 L15.4,8.5 M7.8,14 L16.2,14 M9.5,3 L16.2,14 M14.5,3 L7.8,14 M7.8,14 L17.5,21 M16.2,14 L6.5,21" stroke="currentColor" strokeWidth="0.85"/></>,
+  "Room Struc.":  <><rect x="4" y="9" width="16" height="12" fill="none" stroke="currentColor" strokeWidth="1.5"/><path d="M3,9 L12,3.5 L21,9" fill="none" stroke="currentColor" strokeWidth="1.5"/><rect x="7" y="13" width="3.4" height="3.4" fill="none" stroke="currentColor" strokeWidth="1"/><rect x="13.5" y="13" width="3.4" height="8" fill="none" stroke="currentColor" strokeWidth="1"/></>,
+  "Pipe Rack":    <><line x1="6" y1="4" x2="6" y2="21" stroke="currentColor" strokeWidth="1.6"/><line x1="18" y1="4" x2="18" y2="21" stroke="currentColor" strokeWidth="1.6"/><line x1="4.5" y1="9" x2="19.5" y2="9" stroke="currentColor" strokeWidth="1.3"/><line x1="4.5" y1="15" x2="19.5" y2="15" stroke="currentColor" strokeWidth="1.3"/><circle cx="9.5" cy="7.5" r="1.2" fill="none" stroke="currentColor" strokeWidth="0.9"/><circle cx="13" cy="7.5" r="1.2" fill="none" stroke="currentColor" strokeWidth="0.9"/><circle cx="9.5" cy="13.5" r="1.2" fill="none" stroke="currentColor" strokeWidth="0.9"/><circle cx="13" cy="13.5" r="1.2" fill="none" stroke="currentColor" strokeWidth="0.9"/><circle cx="16" cy="13.5" r="1.2" fill="none" stroke="currentColor" strokeWidth="0.9"/></>,
+  Stack:          <><path d="M9.5,21 L10.5,4 L13.5,4 L14.5,21 Z" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="7" y1="21" x2="17" y2="21" stroke="currentColor" strokeWidth="1.6"/><path d="M10.8,2.6 Q12,1 13.2,2.6" fill="none" stroke="currentColor" strokeWidth="0.95"/><line x1="9.9" y1="13" x2="14.1" y2="13" stroke="currentColor" strokeWidth="0.85"/></>,
 };
 const EquipSVG = ({ type, size=22 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" style={{ display:"block", flexShrink:0 }}>
@@ -4037,7 +4123,7 @@ const edgeTypes = { pipe:PipeEdge, itEdge:ITEdge };
 // SIDEBAR
 // ─────────────────────────────────────────────────────────────
 const Sidebar = memo(({ onDragStart }) => {
-  const [open,setOpen]=useState({ Area:true,EquipUT:true,EquipME:false,EquipFBR:true,Connection:false,Instrument:false });
+  const [open,setOpen]=useState({ Area:true,EquipFBR:true,Connection:false,Instrument:false });
   const tog=k=>setOpen(p=>({...p,[k]:!p[k]}));
   const iS=(color="#475569")=>({ padding:"5px 14px 5px 20px",cursor:"grab",borderBottom:"1px solid #f1f5f9",color,fontSize:11,userSelect:"none",display:"flex",alignItems:"center",gap:6 });
   const hov={ onMouseEnter:e=>{e.currentTarget.style.background="#e0f2fe";},onMouseLeave:e=>{e.currentTarget.style.background="";} };
@@ -4070,32 +4156,33 @@ const Sidebar = memo(({ onDragStart }) => {
           <div key={at} draggable onDragStart={e=>onDragStart(e,"area",at)} style={{ ...iS(c?.label||"#1d4ed8"),background:c?.bg||"transparent" }} {...hov}>▭ {at}</div>
         );})}
       </Sec>
-      <Sec title="Equipment (UT)" cat="EquipUT">
-        {EQUIPMENT_UT.map(eq=>(
-          <div key={eq} draggable onDragStart={e=>onDragStart(e,"equipment",eq)} style={iS()} {...hov}><EquipSVG type={eq} size={14}/>{eq}</div>
-        ))}
-      </Sec>
-      <Sec title="Equipment (ME)" cat="EquipME">
-        {EQUIPMENT_ME.map(eq=>(
-          <div key={eq} draggable onDragStart={e=>onDragStart(e,"equipment",eq)} style={iS("#7c3aed")} {...hov}><EquipSVG type={eq} size={14}/>{eq}</div>
-        ))}
-      </Sec>
-      {/* v10.11: HyREX FBR 코드 체계 대표 Block — 코드 문자별 1개 */}
+      {/* v10.14: Equipment 통합 카탈로그 — FBR Code 체계 (UT/ME 통합, 코드별 복수 Block) */}
       <Sec title="Equipment (FBR Code)" cat="EquipFBR">
-        {EQUIPMENT_FBR.map(({code, type})=>(
-          <div key={code} draggable onDragStart={e=>onDragStart(e,"equipment",type)}
-            style={iS("#b45309")} {...hov}
-            title={`코드 ${code} — 예: 232${code}11`}>
-            <span style={{
-              display:"inline-flex", alignItems:"center", justifyContent:"center",
-              width:15, height:15, borderRadius:3, flexShrink:0,
-              background:"#fef3c7", color:"#92400e",
-              fontSize:9, fontWeight:800, fontFamily:"monospace",
-              border:"1px solid #fcd34d",
-            }}>{code}</span>
-            <EquipSVG type={type} size={14}/>{type}
-          </div>
-        ))}
+        {EQUIPMENT_FBR.map(({code, type}, idx)=>{
+          const prevCode = idx>0 ? EQUIPMENT_FBR[idx-1].code : null;
+          return (
+            <React.Fragment key={`${code}_${type}`}>
+              {/* 코드 그룹 구분선 */}
+              {prevCode !== null && prevCode !== code && (
+                <div style={{ height:1, background:"#e2e8f0", margin:"3px 0" }}/>
+              )}
+              <div draggable onDragStart={e=>onDragStart(e,"equipment",type)}
+                style={iS("#b45309")} {...hov}
+                title={`코드 ${code} — 예: 232${code}11`}>
+                <span style={{
+                  display:"inline-flex", alignItems:"center", justifyContent:"center",
+                  width:15, height:15, borderRadius:3, flexShrink:0,
+                  background:"#fef3c7", color:"#92400e",
+                  fontSize:9, fontWeight:800, fontFamily:"monospace",
+                  border:"1px solid #fcd34d",
+                  // 같은 코드의 후속 항목은 배지 흐리게 (그룹 시각화)
+                  opacity: prevCode === code ? 0.35 : 1,
+                }}>{code}</span>
+                <EquipSVG type={type} size={14}/>{type}
+              </div>
+            </React.Fragment>
+          );
+        })}
       </Sec>
       <Sec title="Connection" cat="Connection">
         {CONNECTION_LIST.map(c=>(
@@ -6578,8 +6665,12 @@ const CanvasInner = () => {
   }, [nodes, setNodes]);
 
   // ── 사양서 적용 (v10.13: 최초 생성 / 수정 반영 분기) ──────
-  const FBR_CODE_TO_TYPE = useMemo(
-    () => Object.fromEntries(EQUIPMENT_FBR.map(f => [f.code, f.type])), []);
+  const FBR_CODE_TO_TYPE = useMemo(() => {
+    // 코드당 첫 등장 type이 대표 (예: B → Bin/Vessel)
+    const m = {};
+    EQUIPMENT_FBR.forEach(f => { if (!(f.code in m)) m[f.code] = f.type; });
+    return m;
+  }, []);
   const applySpecImport = useCallback((parsedBlocks) => {
     if (!parsedBlocks || parsedBlocks.length === 0) { setShowSpecImport(false); return; }
 
