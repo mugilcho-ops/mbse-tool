@@ -5589,6 +5589,94 @@ const SearchModal = ({ nodes, edges, onSelect, onClose }) => {
 
 // ─────────────────────────────────────────────────────────────
 // SPEC IMPORT MODAL
+// ─────────────────────────────────────────────────────────────
+// v10.13: 참여자 추가 input (권한 패널용)
+// ─────────────────────────────────────────────────────────────
+const ParticipantAdder = ({ onAdd }) => {
+  const [name, setName] = useState("");
+  const add = () => { const n = name.trim(); if (n) { onAdd(n); setName(""); } };
+  return (
+    <div style={{ display:"flex", gap:5, marginBottom:5 }}>
+      <input value={name} onChange={e=>setName(e.target.value)}
+        onKeyDown={e=>{ if(e.key==="Enter") add(); }}
+        placeholder="참여자 이름 추가"
+        style={{ flex:1, padding:"4px 8px", border:"1px solid #cbd5e1", borderRadius:4, fontSize:11 }}/>
+      <button onClick={add} style={{
+        background:"#1d4ed8", color:"#fff", border:"none", borderRadius:4,
+        padding:"4px 10px", cursor:"pointer", fontSize:10.5, fontWeight:700 }}>+ 추가</button>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// v10.13: 사양서 변경 이력 조회 모달 (Item No./이름/필드 검색)
+// ─────────────────────────────────────────────────────────────
+const ChangeLogModal = ({ changeLog, onClose }) => {
+  const [q, setQ] = useState("");
+  const ql = q.trim().toLowerCase();
+  // 최신 Rev 우선 정렬 + 검색 필터 (Item No./이름/필드/요청자 부분일치)
+  const entries = [...changeLog].reverse().map(entry => ({
+    ...entry,
+    changes: ql
+      ? (entry.changes||[]).filter(c =>
+          [c.itemNo, c.name, c.field, entry.requester].some(s => String(s||"").toLowerCase().includes(ql)))
+      : (entry.changes||[]),
+  })).filter(entry => !ql || entry.changes.length > 0);
+
+  return (
+    <div style={{ position:"fixed", inset:0, zIndex:1000, background:"rgba(15,23,42,0.55)",
+                  display:"flex", alignItems:"center", justifyContent:"center" }}
+         onClick={onClose}>
+      <div onClick={e=>e.stopPropagation()} style={{
+        width:760, maxWidth:"94vw", maxHeight:"82vh", background:"#fff", borderRadius:12,
+        boxShadow:"0 24px 60px rgba(0,0,0,0.4)", display:"flex", flexDirection:"column", overflow:"hidden",
+      }}>
+        <div style={{ padding:"12px 18px", background:"#0f172a", color:"#fff",
+                      display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+          <b style={{ fontSize:14 }}>📜 사양서 변경 이력 (총 {changeLog.length}개 Revision)</b>
+          <button onClick={onClose} style={{ background:"none", border:"none", color:"#94a3b8", cursor:"pointer", fontSize:18 }}>×</button>
+        </div>
+        <div style={{ padding:"10px 18px", borderBottom:"1px solid #e2e8f0" }}>
+          <input value={q} onChange={e=>setQ(e.target.value)} autoFocus
+            placeholder="🔍 Item No. / 설비명 / 필드 / 요청자 검색"
+            style={{ width:"100%", padding:"7px 12px", border:"1px solid #cbd5e1", borderRadius:6, fontSize:12, boxSizing:"border-box" }}/>
+        </div>
+        <div style={{ flex:1, overflowY:"auto", padding:"10px 18px" }}>
+          {entries.length === 0 && (
+            <div style={{ color:"#94a3b8", fontSize:12, fontStyle:"italic", padding:"24px 0", textAlign:"center" }}>
+              {changeLog.length===0 ? "변경 이력이 없습니다. 사양서 Import(수정 모드) 시 자동 기록됩니다." : "검색 결과가 없습니다."}
+            </div>
+          )}
+          {entries.map((entry,ei)=>(
+            <div key={ei} style={{ marginBottom:12, border:"1px solid #e2e8f0", borderRadius:8, overflow:"hidden" }}>
+              <div style={{ padding:"6px 12px", background:"#f1f5f9", display:"flex", gap:10, alignItems:"center", fontSize:11.5 }}>
+                <span style={{ fontWeight:800, color:"#1d4ed8" }}>Rev.{entry.rev}</span>
+                <span style={{ color:"#475569" }}>{String(entry.date||"").slice(0,16).replace("T"," ")}</span>
+                <span style={{ color:"#0f172a", fontWeight:700 }}>요청: {entry.requester}</span>
+                <span style={{ marginLeft:"auto", color:"#64748b" }}>{entry.changes.length}건</span>
+              </div>
+              <table style={{ width:"100%", borderCollapse:"collapse", fontSize:11 }}>
+                <tbody>
+                  {entry.changes.map((c,ci)=>(
+                    <tr key={ci} style={{ borderTop:"1px solid #f1f5f9" }}>
+                      <td style={{ padding:"4px 12px", fontFamily:"monospace", fontWeight:700, color:"#1d4ed8", whiteSpace:"nowrap" }}>{c.itemNo}</td>
+                      <td style={{ padding:"4px 8px", color:"#334155" }}>{c.name}</td>
+                      <td style={{ padding:"4px 8px", fontWeight:600, color:"#0f172a" }}>{c.field}</td>
+                      <td style={{ padding:"4px 8px", color:"#dc2626", textDecoration:"line-through" }}>{c.before||"(빈 값)"}</td>
+                      <td style={{ padding:"4px 12px", color:"#16a34a", fontWeight:700 }}>{c.after}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
 // 사양서 텍스트 붙여넣기 → Item No. 기준 자동 매핑
 // ─────────────────────────────────────────────────────────────
 const SpecImportModal = ({ nodes, onApply, onCancel }) => {
@@ -6040,10 +6128,12 @@ const CanvasInner = () => {
     try {
       const saved = localStorage.getItem("mbse_autosave");
       if(saved){
-        const { nodes:n, edges:e, history:h } = JSON.parse(saved);
+        const { nodes:n, edges:e, history:h, projectMeta:pm } = JSON.parse(saved);
         if(n) setNodes(normalizeAreaZIndex(n));
         if(e) setEdges(e);
         if(h) setHistory(h);
+        if(pm) setProjectMeta(prev => ({ ...prev, ...pm,
+          permissions: { specImport:[], modelEdit:[], itEdit:[], ...(pm.permissions||{}) } }));
         setSaveMsg("✅ 복원됨");
         setTimeout(()=>setSaveMsg(""),2000);
       }
@@ -6056,7 +6146,7 @@ const CanvasInner = () => {
     if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(()=>{
       try {
-        localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history }));
+        localStorage.setItem("mbse_autosave", JSON.stringify({ nodes, edges, history, projectMeta }));
         // 진단: requirements 보유 노드 카운트 (import 직후 변경이 사라지는지 확인용)
         const reqCount = nodes.reduce((sum,n)=>sum+((n.data?.requirements||[]).length),0);
         console.log(`[AutoSave] 노드 ${nodes.length}, 엣지 ${edges.length}, Requirements 총 ${reqCount}건 저장됨`);
@@ -6065,7 +6155,7 @@ const CanvasInner = () => {
       } catch(err){ console.warn("자동저장 실패",err); }
     }, 2000);
     return()=>{ if(autoSaveTimer.current) clearTimeout(autoSaveTimer.current); };
-  },[nodes,edges]); // eslint-disable-line
+  },[nodes,edges,projectMeta]); // eslint-disable-line
 
   // ── Save 버튼 클릭 → 메모 모달 오픈 ─────────────────────
   const onSave = () => setShowSaveModal(true);
@@ -6092,7 +6182,7 @@ const CanvasInner = () => {
     };
     setHistory(h=>{
       const updated=[log,...h].slice(0,200);
-      localStorage.setItem("mbse_autosave",JSON.stringify({ nodes,edges,history:updated }));
+      localStorage.setItem("mbse_autosave",JSON.stringify({ nodes,edges,history:updated,projectMeta }));
       return updated;
     });
     setShowSaveModal(false);
@@ -6184,6 +6274,7 @@ const CanvasInner = () => {
   const onDragStart=useCallback((e,cat,sub)=>{ e.dataTransfer.setData("mbse/cat",cat); e.dataTransfer.setData("mbse/sub",sub); e.dataTransfer.effectAllowed="move"; },[]);
   const onDragOver=useCallback(e=>{ e.preventDefault(); e.dataTransfer.dropEffect="move"; },[]);
   const onDrop=useCallback(e=>{
+    if(!hasPerm("modelEdit")){ denyMsg("모델 편집"); return; }
     e.preventDefault();
     const cat=e.dataTransfer.getData("mbse/cat"),sub=e.dataTransfer.getData("mbse/sub");
     if(!cat) return;
@@ -6260,7 +6351,7 @@ const CanvasInner = () => {
         setNodes(ns=>[...ns,{id:uid("br"),type:"brench",position:pos,data:{_hint:sub}}]);
       }
     }
-  },[screenToFlowPosition,setNodes,setEdges,edges,nodes]);
+  },[screenToFlowPosition,setNodes,setEdges,edges,nodes,hasPerm]);
 
   // CONNECT — 드래그 힌트 lineType 감지
   const onConnect=useCallback(params=>{
@@ -6459,45 +6550,147 @@ const CanvasInner = () => {
     }
   }, [nodes, setNodes]);
 
-  // ── 사양서 자동 입력 적용 ─────────────────────────────────
+  // ══════════════════════════════════════════════════════════
+  // v10.13: PJT 메타 (PEM/EM·권한·Revision·변경 Log)
+  // ══════════════════════════════════════════════════════════
+  const [projectMeta, setProjectMeta] = useState({
+    pem: "", ems: [], revision: 0,
+    permissions: { specImport: [], modelEdit: [], itEdit: [] },
+    changeLog: [],
+  });
+  const [currentUser, setCurrentUser] = useState(
+    () => localStorage.getItem("mbse_current_user") || ""
+  );
+  const [showPjtPanel, setShowPjtPanel] = useState(false);
+  const [showLogModal, setShowLogModal] = useState(false);
+
+  // 권한 판정: PJT 미설정(PEM 없음)이면 모두 허용 (기존 사용성 유지)
+  // PEM/EM은 전 카테고리 자동 보유, 그 외는 카테고리별 부여 목록 확인
+  const hasPerm = useCallback((cat) => {
+    if (!projectMeta.pem) return true; // PJT 권한 미설정 상태
+    const u = (currentUser || "").trim();
+    if (!u) return false;
+    if (u === projectMeta.pem || (projectMeta.ems || []).includes(u)) return true;
+    return (projectMeta.permissions?.[cat] || []).includes(u);
+  }, [projectMeta, currentUser]);
+
+  const denyMsg = (what) =>
+    alert(`⛔ ${what} 권한이 없습니다.\n현재 사용자: ${currentUser || "(미설정)"}\n우측 하단 👥 권한 패널에서 사용자 설정 또는 PEM/EM에게 권한을 요청하세요.`);
+
+  // ── 사양서 적용 (v10.13: 최초 생성 / 수정 반영 분기) ──────
+  const FBR_CODE_TO_TYPE = useMemo(
+    () => Object.fromEntries(EQUIPMENT_FBR.map(f => [f.code, f.type])), []);
   const applySpecImport = useCallback((parsedBlocks) => {
-    setNodes(ns => ns.map(n => {
-      if (n.type !== "equipment") return n;
+    if (!parsedBlocks || parsedBlocks.length === 0) { setShowSpecImport(false); return; }
+
+    // Item No.에서 장비 코드 문자 추출 → Block 종류 자동 선택 (예: 232A11→Reactor)
+    const guessType = (itemNo) => {
+      const m = String(itemNo).replace(/\s/g,"").match(/\d\.?([A-Z])\d/i);
+      return (m && FBR_CODE_TO_TYPE[m[1].toUpperCase()]) || "Machine";
+    };
+    const specOf = (b) => {
+      const spec = {};
+      Object.entries(b).forEach(([k,v]) => {
+        if (!["itemNos","normalizedKeys","equipName","quantity"].includes(k)) spec[k] = v;
+      });
+      return spec;
+    };
+
+    // 기존 매칭 가능한 equipment 존재 여부
+    const eqNodes = nodes.filter(n => n.type === "equipment" && normalizeItemNo(n.data?.itemNo||""));
+    const anyMatch = eqNodes.some(n => {
+      const key = normalizeItemNo(n.data.itemNo);
+      return parsedBlocks.some(b => (b.normalizedKeys||[]).some(bk => bk === key));
+    });
+
+    // ── ① 최초 생성 모드: Revision 0 + 매칭 Block 없음 ──────
+    if (projectMeta.revision === 0 && !anyMatch) {
+      if (!window.confirm(
+        `📐 최초 생성 모드\n사양서의 ${parsedBlocks.length}개 Item으로 Block을 자동 생성하고\nItem No. 앞자리 기준 구획별로 좌측부터 배치합니다.\n진행할까요?`)) return;
+      // 앞자리(대분류 숫자) 그룹핑
+      const groups = {};
+      parsedBlocks.forEach(b => {
+        const itemNo = b.itemNos?.[0] || "";
+        const g = (String(itemNo).match(/^(\d)/) || [,"기타"])[1];
+        (groups[g] = groups[g] || []).push(b);
+      });
+      const newNodes = [];
+      let baseX = 60;
+      Object.keys(groups).sort().forEach(g => {
+        const arr = groups[g].sort((a,b) =>
+          String(a.itemNos?.[0]||"").localeCompare(String(b.itemNos?.[0]||""), undefined, {numeric:true}));
+        const PER_COL = 30; // 컬럼당 30개, 초과 시 서브컬럼
+        arr.forEach((b, i) => {
+          const sub = Math.floor(i / PER_COL), row = i % PER_COL;
+          const itemNo = b.itemNos?.[0] || "";
+          newNodes.push({
+            id: uid("eq"), type: "equipment",
+            position: { x: baseX + sub * 215, y: 60 + row * 115 },
+            data: { equipType: guessType(itemNo), itemNo, label: b.equipName || "", ...specOf(b) },
+          });
+        });
+        baseX += Math.ceil(arr.length / PER_COL) * 215 + 90; // 그룹 간 구획 여백
+      });
+      setNodes(ns => [...ns, ...newNodes]);
+      setProjectMeta(pm => ({ ...pm, revision: 1,
+        changeLog: [...(pm.changeLog||[]), {
+          rev: 1, date: new Date().toISOString(), requester: currentUser || "(미설정)",
+          changes: [{ itemNo:"-", name:`최초 생성`, field:"Block 자동 생성", before:"", after:`${newNodes.length}건` }],
+        }]}));
+      setShowSpecImport(false);
+      setSaveMsg(`✅ 최초 생성: ${newNodes.length}개 Block 자동 배치 완료 (Rev.1)`);
+      setTimeout(()=>setSaveMsg(""), 4000);
+      return;
+    }
+
+    // ── ② 수정 반영 모드: 변경분 diff → Revision 확인 → 적용 + Log ──
+    const changes = [];
+    const planned = new Map(); // nodeId → merged data
+    nodes.forEach(n => {
+      if (n.type !== "equipment") return;
       const nodeKey = normalizeItemNo(n.data?.itemNo||"");
-      if (!nodeKey) return n;
-      // 정규화 키로 매칭 블록 찾기
-      const block = parsedBlocks.find(b => {
-        const bKeys = b.normalizedKeys || normalizeItemNos(b.itemNos?.[0]||"");
-        return bKeys.some(bk => bk && bk === nodeKey);
-      });
-      if (!block) return n;
-      // 사양 필드 업데이트 (itemNos, normalizedKeys, equipName, quantity 제외)
-      // — 키 순서를 block(=사양서) 순서대로 보존
-      const specData = {};
-      Object.entries(block).forEach(([k,v]) => {
-        if (!["itemNos","normalizedKeys","equipName","quantity"].includes(k)) specData[k] = v;
-      });
-      // 설비명도 업데이트 (기존 값 없을 때만)
+      if (!nodeKey) return;
+      const block = parsedBlocks.find(b =>
+        (b.normalizedKeys || normalizeItemNos(b.itemNos?.[0]||"")).some(bk => bk && bk === nodeKey));
+      if (!block) return;
+      const specData = specOf(block);
       if (!n.data.label && block.equipName) specData.label = block.equipName;
-
-      // 키 순서 재구성:
-      //  1) specData(=사양서 순서) 키를 먼저 배치
-      //  2) 그 다음 기존 data 중 specData에 없는 키 (시스템 키, 기존 보존 데이터)
-      // → Inspector에서 사양서 순서대로 표시됨
-      const merged = {};
-      // 1단계: spec 키 먼저
-      Object.entries(specData).forEach(([k,v]) => { merged[k] = v; });
-      // 2단계: 기존 data 중 spec에 없는 키만 추가
-      Object.entries(n.data || {}).forEach(([k,v]) => {
-        if (!(k in merged)) merged[k] = v;
+      // diff 추출 (실제 값이 달라진 필드만)
+      Object.entries(specData).forEach(([k,v]) => {
+        const before = n.data?.[k];
+        if (String(before ?? "") !== String(v ?? "")) {
+          changes.push({ itemNo: n.data.itemNo, name: n.data.label || block.equipName || "",
+                         field: k, before: String(before ?? ""), after: String(v ?? "") });
+        }
       });
+      // 머지 (사양서 키 순서 우선)
+      const merged = {};
+      Object.entries(specData).forEach(([k,v]) => { merged[k] = v; });
+      Object.entries(n.data || {}).forEach(([k,v]) => { if (!(k in merged)) merged[k] = v; });
+      planned.set(n.id, merged);
+    });
 
-      return { ...n, data: merged };
+    if (changes.length === 0) {
+      alert("ℹ 사양서와 비교하여 변경된 내용이 없습니다. (Revision 유지)");
+      setShowSpecImport(false);
+      return;
+    }
+    const nextRev = (projectMeta.revision || 0) + 1;
+    if (!window.confirm(
+      `🔄 수정 반영 모드\n변경 감지: ${changes.length}건 (Item ${new Set(changes.map(c=>c.itemNo)).size}개)\n\nRevision을 ${projectMeta.revision} → ${nextRev} 로 올리고 반영할까요?`)) return;
+    let requester = window.prompt("수정 요청자 이름을 입력하세요:", currentUser || "");
+    if (requester === null) return; // 취소
+    requester = requester.trim() || "(미입력)";
+
+    setNodes(ns => ns.map(n => planned.has(n.id) ? { ...n, data: planned.get(n.id) } : n));
+    setProjectMeta(pm => ({ ...pm, revision: nextRev,
+      changeLog: [...(pm.changeLog||[]), {
+        rev: nextRev, date: new Date().toISOString(), requester, changes }],
     }));
     setShowSpecImport(false);
-    setSaveMsg(`✅ 사양서 ${parsedBlocks.length}건 적용 완료`);
-    setTimeout(()=>setSaveMsg(""),3000);
-  },[setNodes]);
+    setSaveMsg(`✅ Rev.${nextRev} 반영: ${changes.length}건 변경 (요청: ${requester})`);
+    setTimeout(()=>setSaveMsg(""), 4000);
+  },[nodes, projectMeta, currentUser, FBR_CODE_TO_TYPE, setNodes]);
 
   const onNodeDragStop = useCallback((_, dragNode) => {
     setGuides([]);
@@ -6616,15 +6809,69 @@ const CanvasInner = () => {
 
   // JSON Export / Import
   const onExport=()=>{
-    const blob=new Blob([JSON.stringify({nodes,edges},null,2)],{type:"application/json"});
+    const blob=new Blob([JSON.stringify({nodes,edges,projectMeta},null,2)],{type:"application/json"});
     const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
     a.download=`MBSE_${new Date().toISOString().slice(0,10)}.json`; a.click();
   };
   const onImport=e=>{
+    if(!hasPerm("specImport")){ denyMsg("JSON Import"); e.target.value=""; return; }
     const f=e.target.files[0]; if(!f) return;
     const r=new FileReader();
-    r.onload=ev=>{ try{ const p=JSON.parse(ev.target.result); if(p.nodes)setNodes(normalizeAreaZIndex(p.nodes)); if(p.edges)setEdges(p.edges); }catch{ alert("Invalid JSON"); } };
+    r.onload=ev=>{ try{ const p=JSON.parse(ev.target.result); if(p.nodes)setNodes(normalizeAreaZIndex(p.nodes)); if(p.edges)setEdges(p.edges); if(p.projectMeta)setProjectMeta(prev=>({...prev,...p.projectMeta,permissions:{specImport:[],modelEdit:[],itEdit:[],...(p.projectMeta.permissions||{})}})); }catch{ alert("Invalid JSON"); } };
     r.readAsText(f); e.target.value="";
+  };
+
+  // ══════════════════════════════════════════════════════════
+  // v10.12: 모델 배포(Publish) 메커니즘 — Teams 공유용
+  //  문제: localStorage는 개인 브라우저 저장소라 수정 내용이 다른 참가자에게 전파 안 됨
+  //  해법: ① 작성자가 "📤 배포 JSON"으로 model-published.json 다운로드
+  //        ② GitHub repo의 public/ 폴더에 커밋 → 사이트 루트에 서빙됨
+  //        ③ 모든 참가자의 앱이 시작 시 이 파일을 확인 → 새 버전이면 배너로 알림
+  //        ④ [최신 모델 적용] 클릭 시 동기화
+  // ══════════════════════════════════════════════════════════
+  const [publishedUpdate, setPublishedUpdate] = useState(null); // {publishedAt, publishedBy, nodes, edges}
+
+  // 배포용 JSON 다운로드 (publishedAt 타임스탬프 포함)
+  const onPublishExport = () => {
+    const payload = {
+      publishedAt: new Date().toISOString(),
+      publishedBy: "MBSE Master",
+      nodes, edges, projectMeta,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type:"application/json" });
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+    a.download = "model-published.json"; a.click();
+    setSaveMsg("📤 배포 JSON 생성 — GitHub public/ 폴더에 커밋하세요");
+    setTimeout(()=>setSaveMsg(""), 5000);
+  };
+
+  // 앱 시작 시 배포본 확인 (캐시 우회 fetch — Teams WebView 캐시 무력화)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch(`model-published.json?t=${Date.now()}`, { cache:"no-store" });
+        if (!res.ok) return; // 파일 미배포 — 조용히 무시
+        const data = await res.json();
+        if (!data?.publishedAt || !Array.isArray(data.nodes)) return;
+        const applied = localStorage.getItem("mbse_published_applied");
+        if (data.publishedAt !== applied) {
+          setPublishedUpdate(data); // 새 배포본 → 배너 표시
+        }
+      } catch { /* 오프라인/미배포 — 무시 */ }
+    })();
+  }, []);
+
+  // 배포본 적용
+  const applyPublished = () => {
+    if (!publishedUpdate) return;
+    setNodes(normalizeAreaZIndex(publishedUpdate.nodes || []));
+    setEdges(publishedUpdate.edges || []);
+    if (publishedUpdate.projectMeta) setProjectMeta(prev => ({ ...prev, ...publishedUpdate.projectMeta,
+      permissions: { specImport:[], modelEdit:[], itEdit:[], ...(publishedUpdate.projectMeta.permissions||{}) } }));
+    localStorage.setItem("mbse_published_applied", publishedUpdate.publishedAt);
+    setPublishedUpdate(null);
+    setSaveMsg(`✅ 배포 모델 적용됨 (${publishedUpdate.publishedAt.slice(0,16).replace("T"," ")})`);
+    setTimeout(()=>setSaveMsg(""), 4000);
   };
 
   // Excel Export
@@ -6642,6 +6889,7 @@ const CanvasInner = () => {
 
   // Excel Import
   const onExcelImport = async (e) => {
+    if(!hasPerm("specImport")){ denyMsg("Excel Import"); e.target.value=""; return; }
     const f = e.target.files[0]; if(!f) return;
     try {
       setXlsxMsg("IC Register 불러오는 중...");
@@ -6720,13 +6968,30 @@ const CanvasInner = () => {
           {/* JSON */}
           <button onClick={onExport} style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>⬇ JSON</button>
           <button onClick={()=>fileRef.current?.click()} style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}>⬆ JSON</button>
+          {/* v10.12: 배포 JSON — Teams 참가자 전체 공유용 (public/ 폴더에 커밋) */}
+          <button onClick={onPublishExport}
+            style={{ background:"#7c2d12",color:"#fdba74",border:"1px solid #9a3412",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700 }}
+            title="현재 모델을 model-published.json으로 다운로드 → GitHub public/ 폴더에 커밋하면 모든 Teams 참가자에게 업데이트 알림이 표시됩니다">
+            📤 배포
+          </button>
+          {/* v10.13: PJT 권한 패널 + 변경 Log */}
+          <button onClick={()=>setShowPjtPanel(v=>!v)}
+            style={{ background:"#1e293b",color:projectMeta.pem?"#5eead4":"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}
+            title={projectMeta.pem?`PEM: ${projectMeta.pem} · Rev.${projectMeta.revision} · 사용자: ${currentUser||"미설정"}`:"PJT 권한 설정 (PEM/EM, 입력 권한)"}>
+            👥 권한{projectMeta.revision>0?` R${projectMeta.revision}`:""}
+          </button>
+          <button onClick={()=>setShowLogModal(true)}
+            style={{ background:"#1e293b",color:"#94a3b8",border:"1px solid #334155",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11 }}
+            title="사양서 수정 이력 조회 (Item No./이름 검색)">
+            📜 Log{(projectMeta.changeLog||[]).length>0?` ${projectMeta.changeLog.length}`:""}
+          </button>
           <input ref={fileRef} type="file" accept=".json" style={{ display:"none" }} onChange={onImport}/>
 
           {/* 구분선 */}
           <div style={{ width:1,height:20,background:"#334155",margin:"0 2px" }}/>
 
           {/* 📋 사양서 자동 입력 */}
-          <button onClick={()=>setShowSpecImport(true)}
+          <button onClick={()=>{ if(!hasPerm("specImport")){ denyMsg("사양서 Import"); return; } setShowSpecImport(true); }}
             style={{ background:"#7c3aed",color:"#fff",border:"none",borderRadius:5,padding:"3px 10px",cursor:"pointer",fontSize:11,fontWeight:700 }}>
             📋 사양서 Import
           </button>
@@ -6920,6 +7185,123 @@ const CanvasInner = () => {
           )}
         </div>
       </div>
+      {/* v10.13: PJT 권한 패널 (우하단 귀퉁이) */}
+      {showPjtPanel && (() => {
+        const pm = projectMeta;
+        const allParticipants = [...new Set([
+          ...(pm.permissions?.specImport||[]), ...(pm.permissions?.modelEdit||[]), ...(pm.permissions?.itEdit||[]),
+        ])];
+        const togglePerm = (name, cat) => {
+          setProjectMeta(prev => {
+            const list = prev.permissions?.[cat] || [];
+            const next = list.includes(name) ? list.filter(x=>x!==name) : [...list, name];
+            return { ...prev, permissions: { ...prev.permissions, [cat]: next } };
+          });
+        };
+        const removeParticipant = (name) => {
+          setProjectMeta(prev => ({ ...prev, permissions: {
+            specImport: (prev.permissions?.specImport||[]).filter(x=>x!==name),
+            modelEdit:  (prev.permissions?.modelEdit||[]).filter(x=>x!==name),
+            itEdit:     (prev.permissions?.itEdit||[]).filter(x=>x!==name),
+          }}));
+        };
+        const inputSm = { padding:"4px 8px", border:"1px solid #cbd5e1", borderRadius:4, fontSize:11, boxSizing:"border-box" };
+        return (
+          <div style={{
+            position:"fixed", right:14, bottom:14, zIndex:997, width:340,
+            background:"#fff", border:"1px solid #cbd5e1", borderRadius:10,
+            boxShadow:"0 10px 30px rgba(0,0,0,0.25)", fontSize:11.5, overflow:"hidden",
+          }}>
+            <div style={{ padding:"8px 12px", background:"#0f172a", color:"#fff",
+                          display:"flex", justifyContent:"space-between", alignItems:"center" }}>
+              <b>👥 PJT 권한 설정 {pm.revision>0 && <span style={{color:"#5eead4"}}>· Rev.{pm.revision}</span>}</b>
+              <button onClick={()=>setShowPjtPanel(false)} style={{ background:"none",border:"none",color:"#94a3b8",cursor:"pointer",fontSize:14 }}>×</button>
+            </div>
+            <div style={{ padding:"10px 12px", display:"flex", flexDirection:"column", gap:8, maxHeight:"60vh", overflowY:"auto" }}>
+              {/* 내 이름 */}
+              <div>
+                <div style={{ fontWeight:700, color:"#334155", marginBottom:3 }}>내 이름 (현재 사용자)</div>
+                <input value={currentUser} placeholder="이름 입력"
+                  onChange={e=>{ setCurrentUser(e.target.value); localStorage.setItem("mbse_current_user", e.target.value); }}
+                  style={{ ...inputSm, width:"100%" }}/>
+              </div>
+              {/* PEM / EM */}
+              <div>
+                <div style={{ fontWeight:700, color:"#334155", marginBottom:3 }}>PEM (1명) — 전체 권한</div>
+                <input value={pm.pem} placeholder="PEM 이름"
+                  onChange={e=>setProjectMeta(prev=>({...prev, pem:e.target.value}))}
+                  style={{ ...inputSm, width:"100%" }}/>
+              </div>
+              <div>
+                <div style={{ fontWeight:700, color:"#334155", marginBottom:3 }}>EM (다수, 쉼표 구분) — 전체 권한</div>
+                <input value={(pm.ems||[]).join(", ")} placeholder="예: 김EM, 이EM"
+                  onChange={e=>setProjectMeta(prev=>({...prev, ems:e.target.value.split(",").map(s=>s.trim()).filter(Boolean)}))}
+                  style={{ ...inputSm, width:"100%" }}/>
+              </div>
+              <div style={{ fontSize:10, color:"#64748b", background:"#f1f5f9", borderRadius:5, padding:"5px 8px" }}>
+                PEM/EM은 사양서·엑셀·JSON Import 및 모든 입력 권한을 자동 보유합니다.
+                PEM이 비어 있으면 권한 제한 없이 모두 입력 가능합니다. 조회는 항상 전원 가능.
+              </div>
+              {/* 참여자별 카테고리 권한 */}
+              <div>
+                <div style={{ fontWeight:700, color:"#334155", marginBottom:3 }}>참여자 입력 권한 (카테고리별)</div>
+                <ParticipantAdder onAdd={(name)=>{ if(name) togglePerm(name,"itEdit"); }}/>
+                {allParticipants.length===0 && (
+                  <div style={{ fontSize:10, color:"#94a3b8", fontStyle:"italic", padding:"4px 0" }}>
+                    참여자를 추가하고 카테고리를 체크하세요
+                  </div>
+                )}
+                {allParticipants.map(name=>(
+                  <div key={name} style={{ display:"flex", alignItems:"center", gap:6, padding:"3px 0", borderBottom:"1px dashed #e2e8f0" }}>
+                    <span style={{ flex:1, fontWeight:600, color:"#0f172a" }}>{name}</span>
+                    {[["specImport","Import"],["modelEdit","모델"],["itEdit","IT"]].map(([cat,lbl])=>(
+                      <label key={cat} style={{ display:"flex", alignItems:"center", gap:2, fontSize:10, color:"#475569", cursor:"pointer" }}>
+                        <input type="checkbox" checked={(pm.permissions?.[cat]||[]).includes(name)}
+                          onChange={()=>togglePerm(name,cat)}/>
+                        {lbl}
+                      </label>
+                    ))}
+                    <button onClick={()=>removeParticipant(name)} style={{ background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:12 }}>×</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* v10.13: 변경 Log 모달 */}
+      {showLogModal && <ChangeLogModal changeLog={projectMeta.changeLog||[]} onClose={()=>setShowLogModal(false)}/>}
+
+      {/* v10.12: 새 배포 모델 알림 배너 */}
+      {publishedUpdate && (
+        <div style={{
+          position:"fixed", top:52, left:"50%", transform:"translateX(-50%)",
+          zIndex:998, background:"#7c2d12", color:"#fff",
+          padding:"10px 18px", borderRadius:8,
+          boxShadow:"0 8px 24px rgba(0,0,0,0.35)", border:"1px solid #ea580c",
+          display:"flex", alignItems:"center", gap:12, fontSize:12,
+          maxWidth:"90vw",
+        }}>
+          <span style={{ fontSize:18 }}>📢</span>
+          <div>
+            <div style={{ fontWeight:800 }}>새 모델이 배포되었습니다</div>
+            <div style={{ fontSize:10.5, opacity:0.85 }}>
+              {publishedUpdate.publishedAt.slice(0,16).replace("T"," ")} 배포
+              · 적용 시 현재 화면의 모델이 배포본으로 교체됩니다
+            </div>
+          </div>
+          <button onClick={applyPublished} style={{
+            background:"#ea580c", color:"#fff", border:"none", borderRadius:5,
+            padding:"6px 14px", cursor:"pointer", fontSize:11, fontWeight:800, whiteSpace:"nowrap",
+          }}>최신 모델 적용</button>
+          <button onClick={()=>setPublishedUpdate(null)} style={{
+            background:"rgba(255,255,255,0.15)", color:"#fff", border:"none", borderRadius:5,
+            padding:"6px 10px", cursor:"pointer", fontSize:11, whiteSpace:"nowrap",
+          }}>나중에</button>
+        </div>
+      )}
+
       {modal&&<ConnModal defaultType={modalDefault} canBeIT={canBeIT} onConfirm={confirmConn} onCancel={()=>{ setModal(false); connRef.current=null; setCanBeIT(false); }}/>}
 
       {/* v10.3: IT Line Definition + Check List 모달 */}
@@ -6933,6 +7315,7 @@ const CanvasInner = () => {
             nodes={nodes}
             allITEdges={allITEdges}
             onSave={(id, newData) => {
+              if(!hasPerm("itEdit")){ denyMsg("IT 관리 입력"); return; }
               setEdges(es => es.map(e => e.id === id ? { ...e, data: { ...e.data, ...newData } } : e));
               setItModalEdgeId(null);
             }}
