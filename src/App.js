@@ -1815,8 +1815,10 @@ const EQUIPMENT_LIST = [...new Set([
 ])];
 
 // ── Connection 타입 ──────────────────────────────────────────
-const CONNECTION_LIST = ["Piping","Piping (↔)","Duct","Brench","Process Gas","Material"];
-const CONVEYOR_LIST   = ["Conveyor"];
+const CONNECTION_LIST = ["Piping","Piping (↔)","Duct","Brench","Process Gas","Material",
+  "Hot Gas Duct","Cold Gas Duct","Hot Gas Pipe"];
+// v10.16: Conveyor 4종 (Belt 기본) — 명칭은 작도 후 수정 가능
+const CONVEYOR_LIST   = ["Belt Conveyor","Chain Conveyor","Pipe Conveyor","Bucket Conveyor"];
 
 // 라인 스타일 정의
 const LINE_STYLE = {
@@ -1826,7 +1828,17 @@ const LINE_STYLE = {
   Brench:          { color:"#94a3b8", sw:1.5, dash:"none", bidir:false },
   "Process Gas":   { color:"#7c3aed", sw:5,   dash:"none", bidir:false },
   Material:        { color:"#92400e", sw:5,   dash:"none", bidir:false },
-  Conveyor:        { color:"#78350f", sw:2,   dash:"7,3",  bidir:false },
+  // v10.16: Gas Duct/Pipe — 파스텔 Hot(빨강)/Cold(파랑)
+  "Hot Gas Duct":  { color:"#ef4444", sw:7,   dash:"none", bidir:false },
+  "Cold Gas Duct": { color:"#3b82f6", sw:7,   dash:"none", bidir:false },
+  "Hot Gas Pipe":  { color:"#ef4444", sw:4,   dash:"none", bidir:false },
+  // Conveyor 4종 (점선 계열)
+  "Belt Conveyor":   { color:"#78350f", sw:3, dash:"7,3",  bidir:false },
+  "Chain Conveyor":  { color:"#78350f", sw:3, dash:"2,3",  bidir:false },
+  "Pipe Conveyor":   { color:"#78350f", sw:4, dash:"1,4",  bidir:false },
+  "Bucket Conveyor": { color:"#78350f", sw:3, dash:"10,4", bidir:false },
+  // 레거시 호환 (구버전 모델의 "Conveyor" 타입)
+  Conveyor:        { color:"#78350f", sw:3,   dash:"7,3",  bidir:false },
 };
 
 const INSTRUMENT_CATS = { Flow:[], Pressure:[], Temperature:[], Level:[] };
@@ -2650,7 +2662,7 @@ const EquipmentNode = memo(({ id, data, selected }) => {
     <div style={{
       background:selected?"#eff6ff":"#ffffff",
       border:`${selected?2:1.5}px solid ${selected?"#3b82f6":"#cbd5e1"}`,
-      borderRadius:8,minWidth:110,minHeight:64,
+      borderRadius:8,minWidth:150,minHeight:72,
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       padding:"6px 12px 8px",fontSize:11,cursor:"default",
       position:"relative",userSelect:"none",boxSizing:"border-box",
@@ -2660,22 +2672,22 @@ const EquipmentNode = memo(({ id, data, selected }) => {
         <Handle key={pid} type="source" position={posMap[dir]} id={pid} style={getStyle(dir,pct)}/>
       ))}
 
-      {/* ── Item No: 상단 표시 ── */}
+      {/* ── Item No: 상단 표시 (v10.15: 가독성 위해 3배 확대) ── */}
       {editing ? (
         <input ref={inputRef} className="mbse-label-input" value={draft}
           onChange={e=>setDraft(e.target.value)} onBlur={commitEdit}
           onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
           onClick={e=>e.stopPropagation()} placeholder="Item No"
-          style={{ marginBottom:4 }}/>
+          style={{ marginBottom:4, fontSize:26, fontWeight:800, textAlign:"center", width:"100%", boxSizing:"border-box" }}/>
       ) : (
         <div onDoubleClick={startEdit}
-          style={{ fontWeight:700,color:"#1d4ed8",fontSize:10,textAlign:"center",
-                   lineHeight:1.2,cursor:"text",padding:"1px 4px",borderRadius:3,
-                   minWidth:60,marginBottom:3,
+          style={{ fontWeight:800,color:"#1d4ed8",fontSize:30,textAlign:"center",
+                   lineHeight:1.15,cursor:"text",padding:"3px 8px",borderRadius:5,
+                   minWidth:60,marginBottom:5,letterSpacing:0.3,
                    background: data.itemNo?"rgba(29,78,216,0.06)":"transparent",
                    border: data.itemNo?"1px dashed #bfdbfe":"1px dashed transparent" }}
           title="더블클릭으로 Item No 편집">
-          {data.itemNo || <span style={{ color:"#cbd5e1",fontSize:9 }}>Item No</span>}
+          {data.itemNo || <span style={{ color:"#cbd5e1",fontSize:18 }}>Item No</span>}
         </div>
       )}
 
@@ -3486,7 +3498,11 @@ const PipeEdge = ({
   const fluidLabel  = data?.fluidSub||"";
   const sizeLabel   = data?.sizeNum?`${data.sizeNum}A`:(data?.size||"");
   const pipingLabel = [fluidLabel,sizeLabel].filter(Boolean).join("-");
-  const isSpecial   = lt==="Process Gas"||lt==="Material";
+  const isGasLine   = lt==="Hot Gas Duct"||lt==="Cold Gas Duct"||lt==="Hot Gas Pipe";
+  const isGasDuct   = lt==="Hot Gas Duct"||lt==="Cold Gas Duct"; // 이중벽 렌더 대상 (Pipe 제외)
+  const isConveyor  = lt.endsWith("Conveyor");
+  // 명칭(lineText) 표시 대상: 작도 후 수정 가능한 라인들
+  const isSpecial   = lt==="Process Gas"||lt==="Material"||isGasLine||isConveyor;
   const showLabel   = isSpecial?(data?.lineText||lt):pipingLabel;
   const icNo        = data?.ic_no||"";
   const icStatus    = data?.ic_status||"";
@@ -3673,13 +3689,39 @@ const PipeEdge = ({
           strokeLinecap="round" style={{pointerEvents:"none"}}/>
       )}
 
-      {/* 실제 라인 */}
-      <path d={path} fill="none"
-        stroke={stroke} strokeWidth={sw}
-        strokeDasharray={ls.dash==="none"?"":ls.dash}
-        markerEnd={`url(#${mkId})`}
-        markerStart={ls.bidir?`url(#${mkId}_start)`:undefined}
-        style={{pointerEvents:"none"}}/>
+      {/* v10.16: Gas Duct — 이중벽 + 파스텔 채움(투명 50%) */}
+      {isGasDuct ? (
+        <>
+          {/* 외벽: 파스텔 채움 (반투명) */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={sw+6} opacity={0.5}
+            strokeLinecap="butt" strokeLinejoin="round"
+            style={{pointerEvents:"none"}}/>
+          {/* 외벽 테두리 */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={sw+6} opacity={0.9}
+            strokeLinecap="butt" strokeLinejoin="round"
+            fillOpacity={0} style={{pointerEvents:"none", fill:"none", strokeDasharray:"none", strokeOpacity:0.55}}/>
+          {/* 내벽 (이중벽 느낌) */}
+          <path d={path} fill="none"
+            stroke="#ffffff" strokeWidth={Math.max(sw-2,2)} opacity={0.55}
+            strokeLinecap="butt" strokeLinejoin="round"
+            style={{pointerEvents:"none"}}/>
+          {/* 내부 흐름 화살표 (중심선) */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={2} opacity={0.95}
+            markerEnd={`url(#${mkId})`}
+            style={{pointerEvents:"none"}}/>
+        </>
+      ) : (
+        /* 실제 라인 */
+        <path d={path} fill="none"
+          stroke={stroke} strokeWidth={sw}
+          strokeDasharray={ls.dash==="none"?"":ls.dash}
+          markerEnd={`url(#${mkId})`}
+          markerStart={ls.bidir?`url(#${mkId}_start)`:undefined}
+          style={{pointerEvents:"none"}}/>
+      )}
 
       {/* 선택 시 세그먼트 핸들 — 중앙 파란 사각형 (stub 제외) */}
       {selected&&segs.map((seg,i)=>{
@@ -4193,7 +4235,7 @@ const Sidebar = memo(({ onDragStart }) => {
         ))}
         {CONVEYOR_LIST.map(c=>(
           <div key={c} draggable onDragStart={e=>onDragStart(e,"conveyor",c)} style={iS("#78350f")} {...hov}>
-            {linePreview("Conveyor")}╌╌ {c}
+            {linePreview(c)}{c}
           </div>
         ))}
         {/* v10.3: IT Line — Area↔Area Interface Tie-in */}
