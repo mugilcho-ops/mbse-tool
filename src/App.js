@@ -1831,8 +1831,8 @@ const EQUIPMENT_FBR = [
   { code:"Y", type:"Room Struc."    },
   { code:"Y", type:"Pipe Rack"      },
   { code:"Y", type:"Stack"          },
-  // Z — Foundation
-  { code:"Z", type:"Foundation"     },
+  // Z — Piping 설계 커뮤니케이션 허브 (배관설계 Spec/요구사항/Issue/협의 공유)
+  { code:"Z", type:"Piping"         },
 ];
 // 레거시 호환: 기존 모델에 배치된 구버전 타입명 (Inspector select 등에서 인식)
 const EQUIPMENT_LEGACY = [
@@ -1840,7 +1840,7 @@ const EQUIPMENT_LEGACY = [
   "Steel Structure","Structure","Scrubber","Feed Bin","Bucket Elev.","Compressor",
   "Fan","Stand Pipe","Bubbler","Riser","Pnumatic Conv.","Conveyor","Machine",
   "Hot Duct","Tank","Pump","Pond","Heat Exchanger","Filter","Hopper","Cooling Tower",
-  "Compressor/Fan","Cyclone/Scrubber","Structure/Stack",
+  "Compressor/Fan","Cyclone/Scrubber","Structure/Stack","Foundation",
 ];
 const EQUIPMENT_LIST = [...new Set([
   ...EQUIPMENT_FBR.map(f => f.type),
@@ -2310,6 +2310,8 @@ const ICONS = {
   "Structure/Stack":<><path d="M9,21 L10,4 L14,4 L15,21" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="6" y1="21" x2="18" y2="21" stroke="currentColor" strokeWidth="1.5"/><path d="M10.5,8 Q12,6.5 13.5,8" fill="none" stroke="currentColor" strokeWidth="0.9"/><path d="M11,3 Q12,1.5 13,3" fill="none" stroke="currentColor" strokeWidth="0.9"/></>,
   // Z: 기초 — 패드 + 지반 해칭
   Foundation:     <><rect x="7" y="6" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="1.5"/><line x1="3" y1="17" x2="21" y2="17" stroke="currentColor" strokeWidth="1.8"/><line x1="5" y1="21" x2="8" y2="17" stroke="currentColor" strokeWidth="1"/><line x1="10" y1="21" x2="13" y2="17" stroke="currentColor" strokeWidth="1"/><line x1="15" y1="21" x2="18" y2="17" stroke="currentColor" strokeWidth="1"/></>,
+  // Z: Piping 커뮤니케이션 허브 — 배관 + 문서/노트
+  Piping:         <><path d="M3,8 L13,8 Q16,8 16,11 L16,16" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/><circle cx="3" cy="8" r="1.6" fill="currentColor"/><rect x="11" y="14" width="10" height="8" rx="1.5" fill="none" stroke="currentColor" strokeWidth="1.3"/><line x1="13" y1="17" x2="19" y2="17" stroke="currentColor" strokeWidth="0.9"/><line x1="13" y1="19.3" x2="17" y2="19.3" stroke="currentColor" strokeWidth="0.9"/></>,
 
   // ── v10.14: UT/ME 통합 신규 심볼 ──
   // B군 — 저장조류
@@ -2729,9 +2731,9 @@ const EquipmentNode = memo(({ id, data, selected }) => {
 
   return (
     <div style={{
-      background:selected?"#eff6ff":"#ffffff",
-      border:`${selected?2:1.5}px solid ${selected?"#3b82f6":"#cbd5e1"}`,
-      borderRadius:8,minWidth:110,minHeight:64,
+      background:selected?"#eff6ff":(data.equipType==="Piping"?"#f0f9ff":"#ffffff"),
+      border:`${selected?2:1.5}px ${data.equipType==="Piping"?"dashed":"solid"} ${selected?"#3b82f6":(data.equipType==="Piping"?"#0891b2":"#cbd5e1")}`,
+      borderRadius:8,minWidth:data.equipType==="Piping"?140:110,minHeight:64,
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       padding:"6px 12px 8px",fontSize:11,cursor:"default",
       position:"relative",userSelect:"none",boxSizing:"border-box",
@@ -2769,8 +2771,31 @@ const EquipmentNode = memo(({ id, data, selected }) => {
           ? data.label
           : data.equipType}
       </div>
+
+      {/* ── v10.18: Piping 커뮤니케이션 허브 — 항목 건수 배지 ── */}
+      {data.equipType==="Piping" && (() => {
+        const pc = data.pipingComm || {};
+        const cnt = (arr)=>Array.isArray(arr)?arr.filter(x=>(x?.text||x?.spec||"").trim()).length:0;
+        const reqN = cnt(pc.requirements), issueN = cnt(pc.issues), agreeN = cnt(pc.agreements);
+        const specN = (pc.specNote||"").trim()?1:0;
+        return (
+          <div style={{ display:"flex",gap:3,marginTop:4,flexWrap:"wrap",justifyContent:"center" }}>
+            {specN>0 && <span style={badgeS("#0891b2")}>SPEC</span>}
+            {reqN>0   && <span style={badgeS("#7c3aed")}>요구 {reqN}</span>}
+            {issueN>0 && <span style={badgeS("#dc2626")}>Issue {issueN}</span>}
+            {agreeN>0 && <span style={badgeS("#16a34a")}>협의 {agreeN}</span>}
+            {(specN+reqN+issueN+agreeN)===0 && <span style={{ fontSize:8,color:"#cbd5e1" }}>배관설계 공유 허브</span>}
+          </div>
+        );
+      })()}
     </div>
   );
+});
+
+// Piping 허브 배지 스타일
+const badgeS = (bg) => ({
+  fontSize:8, fontWeight:700, color:"#fff", background:bg,
+  borderRadius:3, padding:"1px 4px", lineHeight:1.3, whiteSpace:"nowrap",
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -4474,6 +4499,11 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 <label style={L}>설비명 (Description)</label>
                 <input style={I} value={d.label||""} onChange={e=>upN("label",e.target.value)}/>
 
+                {/* ── v10.18: Piping 커뮤니케이션 허브 패널 ── */}
+                {d.equipType==="Piping" ? (
+                  <PipingCommPanel d={d} upN={upN}/>
+                ) : (
+                <>
                 {/* ── 설비 유형별 맞춤 사양 필드 ── */}
                 <div style={{ fontWeight:600,fontSize:11,color:"#1d4ed8",margin:"8px 0 5px",borderTop:"2px solid #eff6ff",paddingTop:6,display:"flex",alignItems:"center",gap:4 }}>
                   <span>⚙ Engineering Spec</span>
@@ -4621,6 +4651,8 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                   📋 아래 담당자는 <b>Scope of Supply</b> 엑셀 시트에 출력되며, 엑셀에서 수정 후 Import하면 반영됩니다.
                 </div>
                 {renderSoS()}
+                </>
+                )}
               </>
             )}
             {isNode&&sel.type==="instrument"&&(
@@ -5856,6 +5888,99 @@ const SearchModal = ({ nodes, edges, onSelect, onClose }) => {
         )}
       </div>
     </div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────
+// v10.18: Piping 배관설계 커뮤니케이션 허브 패널
+//  Spec 노트 + 요구사항 / Issue / 협의결과 목록 (Area 배관설계 공유용)
+// ─────────────────────────────────────────────────────────────
+const PIPING_ITEM_STATUS = [
+  { value:"검토 중", color:"#f59e0b" },
+  { value:"해결",    color:"#16a34a" },
+  { value:"보류",    color:"#dc2626" },
+];
+const PipingCommPanel = ({ d, upN }) => {
+  const pc = d.pipingComm || { specNote:"", requirements:[], issues:[], agreements:[] };
+  const setPC = (patch) => upN("pipingComm", { ...pc, ...patch });
+
+  // 목록 조작 헬퍼
+  const addItem = (key) => setPC({ [key]: [...(pc[key]||[]), { text:"", status:"검토 중", owner:"", date:"" }] });
+  const updItem = (key, i, field, v) => {
+    const arr = [...(pc[key]||[])]; arr[i] = { ...arr[i], [field]: v }; setPC({ [key]: arr });
+  };
+  const delItem = (key, i) => setPC({ [key]: (pc[key]||[]).filter((_,idx)=>idx!==i) });
+
+  const L = { display:"block", fontSize:11, fontWeight:600, color:"#334155", margin:"2px 0" };
+  const inp = { padding:"4px 7px", border:"1px solid #cbd5e1", borderRadius:4, fontSize:11, boxSizing:"border-box" };
+
+  // 섹션 렌더 (요구사항/Issue/협의결과 공통)
+  const renderList = (key, title, accent) => {
+    const arr = pc[key] || [];
+    return (
+      <div style={{ marginBottom:10, border:`1px solid ${accent}40`, borderRadius:6, overflow:"hidden" }}>
+        <div style={{ padding:"5px 9px", background:`${accent}14`, color:accent,
+          display:"flex", alignItems:"center", gap:6, fontSize:11, fontWeight:700 }}>
+          <span style={{ flex:1 }}>{title}</span>
+          <span style={{ fontSize:9, background:accent, color:"#fff", borderRadius:3, padding:"0 5px" }}>
+            {arr.filter(x=>(x.text||"").trim()).length}건
+          </span>
+          <button onClick={()=>addItem(key)} style={{ background:accent, color:"#fff", border:"none",
+            borderRadius:3, padding:"1px 7px", fontSize:9, cursor:"pointer", fontWeight:700 }}>+ 추가</button>
+        </div>
+        <div style={{ padding: arr.length>0?"6px 9px":"0" }}>
+          {arr.length===0 && <div style={{ padding:"7px 9px", fontSize:10, color:"#94a3b8", fontStyle:"italic" }}>"+ 추가"로 항목을 등록하세요</div>}
+          {arr.map((it,i)=>{
+            const st = PIPING_ITEM_STATUS.find(s=>s.value===it.status) || PIPING_ITEM_STATUS[0];
+            return (
+              <div key={i} style={{ marginBottom:7, paddingBottom:6, borderBottom:i<arr.length-1?"1px dashed #e2e8f0":"none" }}>
+                <textarea value={it.text} onChange={e=>updItem(key,i,"text",e.target.value)}
+                  style={{ ...inp, width:"100%", minHeight:36, resize:"vertical", fontFamily:"inherit", lineHeight:1.4, marginBottom:3 }}
+                  placeholder={`${title} 내용...`}/>
+                <div style={{ display:"flex", gap:4, alignItems:"center" }}>
+                  <select value={it.status} onChange={e=>updItem(key,i,"status",e.target.value)}
+                    style={{ ...inp, flex:"0 0 68px", fontWeight:700, color:st.color, borderColor:st.color+"80", padding:"3px 4px" }}>
+                    {PIPING_ITEM_STATUS.map(s=><option key={s.value} value={s.value}>{s.value}</option>)}
+                  </select>
+                  <input value={it.owner||""} onChange={e=>updItem(key,i,"owner",e.target.value)}
+                    style={{ ...inp, flex:1, padding:"3px 6px" }} placeholder="담당"/>
+                  <input type="date" value={it.date||""} onChange={e=>updItem(key,i,"date",e.target.value)}
+                    style={{ ...inp, flex:"0 0 116px", padding:"3px 4px" }}/>
+                  <button onClick={()=>delItem(key,i)} style={{ background:"none", border:"none", color:"#dc2626", cursor:"pointer", fontSize:13 }}>×</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <div style={{ fontWeight:700, fontSize:11, color:"#0891b2", margin:"8px 0 6px",
+        borderTop:"2px solid #ecfeff", paddingTop:7, display:"flex", alignItems:"center", gap:5 }}>
+        🛠 배관설계 커뮤니케이션 허브
+        <span style={{ fontSize:9, background:"#ecfeff", color:"#0891b2", borderRadius:3, padding:"1px 5px", fontWeight:500 }}>
+          Area 배관 공유
+        </span>
+      </div>
+      <div style={{ fontSize:10, color:"#64748b", background:"#f0f9ff", borderRadius:5, padding:"5px 8px", marginBottom:8, lineHeight:1.5 }}>
+        이 Block은 장비 연결보다 <b>해당 Area의 배관설계 정보 공유</b>를 위한 것입니다.
+        Spec·요구사항·Issue·협의결과를 기록하여 참여자가 확인할 수 있습니다.
+      </div>
+
+      {/* Spec 노트 */}
+      <label style={L}>📐 배관 Spec / 설계기준</label>
+      <textarea value={pc.specNote||""} onChange={e=>setPC({ specNote:e.target.value })}
+        style={{ ...inp, width:"100%", minHeight:60, resize:"vertical", fontFamily:"inherit", lineHeight:1.4, marginBottom:10 }}
+        placeholder="배관 재질, 설계압력/온도, 보온/내화, 적용 코드(ANSI/KS), 라우팅 기준 등..."/>
+
+      {/* 요구사항 / Issue / 협의결과 */}
+      {renderList("requirements", "📋 요구사항 (Requirements)", "#7c3aed")}
+      {renderList("issues",       "⚠ Issue 사항",              "#dc2626")}
+      {renderList("agreements",   "🤝 협의결과 (Agreements)",    "#16a34a")}
+    </>
   );
 };
 
