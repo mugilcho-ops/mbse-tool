@@ -1865,13 +1865,13 @@ const LINE_STYLE = {
   "Hot Gas Duct":  { color:"#ef4444", sw:7,   dash:"none", bidir:false },
   "Cold Gas Duct": { color:"#3b82f6", sw:7,   dash:"none", bidir:false },
   "Hot Gas Pipe":  { color:"#ef4444", sw:4,   dash:"none", bidir:false },
-  // Conveyor 4종 (점선 계열)
-  "Belt Conveyor":   { color:"#78350f", sw:3, dash:"7,3",  bidir:false },
-  "Chain Conveyor":  { color:"#78350f", sw:3, dash:"2,3",  bidir:false },
-  "Pipe Conveyor":   { color:"#78350f", sw:4, dash:"1,4",  bidir:false },
-  "Bucket Conveyor": { color:"#78350f", sw:3, dash:"10,4", bidir:false },
+  // Conveyor 4종 (도형 형태 — v10.19, 종류별 색상 구분)
+  "Belt Conveyor":   { color:"#a16207", sw:14, dash:"4,4",   bidir:false },
+  "Chain Conveyor":  { color:"#9a3412", sw:14, dash:"2,3",   bidir:false },
+  "Pipe Conveyor":   { color:"#7c2d12", sw:14, dash:"1,5",   bidir:false },
+  "Bucket Conveyor": { color:"#854d0e", sw:14, dash:"8,4",   bidir:false },
   // 레거시 호환 (구버전 모델의 "Conveyor" 타입)
-  Conveyor:        { color:"#78350f", sw:3,   dash:"7,3",  bidir:false },
+  Conveyor:        { color:"#a16207", sw:14,  dash:"4,4",  bidir:false },
 };
 
 const INSTRUMENT_CATS = { Flow:[], Pressure:[], Temperature:[], Level:[] };
@@ -3595,9 +3595,25 @@ const PipeEdge = ({
   const isGasLine   = lt==="Hot Gas Duct"||lt==="Cold Gas Duct"||lt==="Hot Gas Pipe";
   const isGasDuct   = lt==="Hot Gas Duct"||lt==="Cold Gas Duct"; // 이중벽 렌더 대상 (Pipe 제외)
   const isConveyor  = lt.endsWith("Conveyor");
-  // 명칭(lineText) 표시 대상: 작도 후 수정 가능한 라인들
+  // 명칭 표시 대상 (작도 후 수정 가능한 라인들)
   const isSpecial   = lt==="Process Gas"||lt==="Material"||isGasLine||isConveyor;
-  const showLabel   = isSpecial?(data?.lineText||lt):pipingLabel;
+  // v10.19: Gas Duct/Pipe/Conveyor는 타입명 대신 Item No. 표시 (색·형태로 종류 식별)
+  //  - Conveyor는 "Item No. + 종류약어"(Belt/Chain/Pipe/Elev.) 표기
+  const conveyorAbbr = isConveyor
+    ? ({ "Belt Conveyor":"Belt","Chain Conveyor":"Chain","Pipe Conveyor":"Pipe",
+         "Bucket Conveyor":"Elev.","Conveyor":"Belt" }[lt] || "")
+    : "";
+  let showLabel;
+  if (isConveyor) {
+    const base = (data?.itemNo||"").trim() || (data?.lineText||"").trim();
+    showLabel = base ? `${base}${conveyorAbbr?` ${conveyorAbbr}`:""}` : (conveyorAbbr || lt);
+  } else if (isGasLine) {
+    showLabel = (data?.itemNo||"").trim() || (data?.lineText||"").trim() || lt;
+  } else if (isSpecial) {
+    showLabel = data?.lineText || lt;
+  } else {
+    showLabel = pipingLabel;
+  }
   const icNo        = data?.ic_no||"";
   const icStatus    = data?.ic_status||"";
   // v10: IC_STATUS_FLOW 색상 우선, 없으면 구버전 색상
@@ -3804,6 +3820,36 @@ const PipeEdge = ({
           {/* 내부 흐름 화살표 (중심선) */}
           <path d={path} fill="none"
             stroke={stroke} strokeWidth={2} opacity={0.95}
+            markerEnd={`url(#${mkId})`}
+            style={{pointerEvents:"none"}}/>
+        </>
+      ) : isConveyor ? (
+        /* v10.19: Conveyor — 굵은 도형(벨트 본체) + 내부 흐름선 + 롤러 점선 */
+        <>
+          {/* 본체 외곽 (채움) */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={14} opacity={0.30}
+            strokeLinecap="butt" strokeLinejoin="round"
+            style={{pointerEvents:"none"}}/>
+          {/* 본체 테두리 (위·아래 경계가 보이게) */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={14} opacity={0.85}
+            strokeLinecap="butt" strokeLinejoin="round"
+            style={{pointerEvents:"none", strokeOpacity:0.5}}/>
+          {/* 내부 흰색 띠 (벨트 면) */}
+          <path d={path} fill="none"
+            stroke="#ffffff" strokeWidth={8} opacity={0.5}
+            strokeLinecap="butt" strokeLinejoin="round"
+            style={{pointerEvents:"none"}}/>
+          {/* 롤러/체인 점선 표현 */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={8} opacity={0.5}
+            strokeDasharray={ls.dash==="none"?"4,4":ls.dash}
+            strokeLinecap="butt"
+            style={{pointerEvents:"none"}}/>
+          {/* 이송 방향 화살표 (중심선) */}
+          <path d={path} fill="none"
+            stroke={stroke} strokeWidth={2.5} opacity={0.95}
             markerEnd={`url(#${mkId})`}
             style={{pointerEvents:"none"}}/>
         </>
