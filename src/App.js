@@ -494,14 +494,30 @@ const exportToExcel = async (nodes, edges) => {
     const tgtLabel = tgtNode?.data?.itemNo||tgtNode?.data?.label||e.target;
     const sizeVal  = d.sizeNum ? `${d.sizeNum}A` : (d.size||"");
     const icMatch  = icRows.find(r => r["Edge ID"] === e.id);
+    // v10.17: Duct/Conveyor 라인의 Item 사양 직렬화 (key=value 줄바꿈)
+    const lt = d.lineType||"";
+    const isItem = lt==="Hot Gas Duct"||lt==="Cold Gas Duct"||lt==="Hot Gas Pipe"||lt.endsWith("Conveyor");
+    let specStr = "";
+    if (isItem) {
+      const reserved = new Set(["label","itemNo","lineType","lineText","equipType","handles","waypoints",
+        "serialNo","size","sizeNum","spec","fluidPrimary","fluidSub","_dragging",
+        "ic_no","ic_status","ic_priority","ic_due","ic_closed","ic_resp_from","ic_resp_to","ic_remark",
+        "icd_no","ifType","icd_status","tq_no","tq_status","openItems","icd_ifaDate","icd_ifcDate",
+        "requirements","summary","sos","poscoStaff","engStaff","wbsCode","teamId","discipline",
+        "scopeText","inclusions","exclusions","vendorName","vendorCountry","vendorContract","vendorICA"]);
+      specStr = Object.keys(d).filter(k=>!reserved.has(k) && d[k]!=null && d[k]!=="")
+        .map(k=>`${k}=${d[k]}`).join("\n");
+    }
     return {
       "Line No.":         d.serialNo   || "",
       "Line Type":        d.lineType   || "Piping",
+      "Item No.":         d.itemNo     || "",
       "Fluid (Primary)":  d.fluidPrimary|| "",
       "Fluid (Sub)":      d.fluidSub   || "",
       "Size":             sizeVal,
       "Schedule":         d.spec       || "",
       "Line Text":        d.lineText   || "",
+      "Item Spec":        specStr,
       "From (Item No.)":  srcLabel,
       "To (Item No.)":    tgtLabel,
       "연결 IC No.":       icMatch?.["IC No."] || "",
@@ -697,8 +713,8 @@ const exportToExcel = async (nodes, edges) => {
 
   // ── SHEET 3: Connection List ───────────────────────────────
   const cnHdrs = [
-    "Line No.","Line Type","Fluid (Primary)","Fluid (Sub)",
-    "Size","Schedule","Line Text",
+    "Line No.","Line Type","Item No.","Fluid (Primary)","Fluid (Sub)",
+    "Size","Schedule","Line Text","Item Spec",
     "From (Item No.)","To (Item No.)","연결 IC No.","IC 상태","Edge ID",
   ];
   const cnAoa = [
@@ -711,6 +727,8 @@ const exportToExcel = async (nodes, edges) => {
       if (h==="IC 상태") return XS.status(v||"—");
       if (h==="Line No."||h==="연결 IC No.")
         return XS.alt(v, i, { bold:true, fc:"1D4ED8" });
+      if (h==="Item Spec")
+        return XS.alt(v, i, { h:"left", wrap:true });
       if (h==="Fluid (Sub)") {
         const color = getFluidColor(v);
         const rgb = color.replace("#","");
@@ -1250,6 +1268,7 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
             };
             apply("Line No.",         "serialNo");
             apply("Line Type",        "lineType");
+            apply("Item No.",         "itemNo");
             apply("Fluid (Primary)",  "fluidPrimary");
             apply("Fluid (Sub)",      "fluidSub");
             apply("Schedule",         "spec");
@@ -1258,6 +1277,20 @@ const importFromExcel = async (file, nodes, edges, setNodes, setEdges) => {
               const sz = pick(row, "Size", "");
               const m = sz.match(/^(\d+)A?$/);
               if (m) newData.sizeNum = m[1]; else newData.size = sz;
+            }
+            // v10.17: Item Spec (key=value 줄바꿈) 역파싱 → 각 사양 필드 복원
+            if ("Item Spec" in row) {
+              const specStr = pick(row, "Item Spec", "");
+              if (specStr.trim() !== "") {
+                specStr.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).forEach(pair => {
+                  const eq = pair.indexOf("=");
+                  if (eq > 0) {
+                    const k = pair.slice(0,eq).trim();
+                    const val = pair.slice(eq+1).trim();
+                    if (k && val) newData[k] = val;
+                  }
+                });
+              }
             }
             updatedEdges[idx] = { ...e, data: newData };
             matched++;
@@ -2005,6 +2038,35 @@ const EQUIP_DEFAULTS = {
 // 설비 유형별 맞춤 사양 항목 정의
 // ─────────────────────────────────────────────────────────────
 const EQUIP_SPEC_FIELDS = {
+  // ── v10.17: Line형 Equipment (Duct/Conveyor) ──
+  // Gas Duct/Pipe 공통 — Gas Balance(종류·성분·유량·온도·압력)
+  "Hot Gas Duct": [
+    { key:"gasType",      label:"Gas Type",            unit:""        },
+    { key:"gasComp_H2",   label:"성분 H₂",              unit:"vol%"    },
+    { key:"gasComp_CO",   label:"성분 CO",              unit:"vol%"    },
+    { key:"gasComp_CO2",  label:"성분 CO₂",             unit:"vol%"    },
+    { key:"gasComp_N2",   label:"성분 N₂",              unit:"vol%"    },
+    { key:"gasComp_H2O",  label:"성분 H₂O",             unit:"vol%"    },
+    { key:"gasComp_etc",  label:"성분 기타",            unit:"vol%"    },
+    { key:"flowRate",     label:"유량 (Flow)",          unit:"Nm³/h"   },
+    { key:"gasTemp",      label:"온도 (Temp.)",         unit:"℃"       },
+    { key:"gasPress",     label:"압력 (Press.)",        unit:"barg"    },
+    { key:"ductSize",     label:"Duct Size",           unit:"mm"      },
+    { key:"material",     label:"재질 (Material)",      unit:""        },
+    { key:"refractory",   label:"내화물 (Refractory)",  unit:""        },
+    { key:"balanceMemo",  label:"In/Out Balance 메모",  unit:""        },
+  ],
+  // Conveyor 공통 — 이송 사양
+  "Belt Conveyor": [
+    { key:"material",     label:"이송물 (Material)",     unit:""        },
+    { key:"capacity",     label:"이송능력 (Capacity)",   unit:"t/h"     },
+    { key:"length",       label:"길이 (Length)",        unit:"m"       },
+    { key:"width",        label:"폭 (Width/Size)",      unit:"mm"      },
+    { key:"speed",        label:"속도 (Speed)",         unit:"m/s"     },
+    { key:"incline",      label:"경사각 (Incline)",      unit:"°"       },
+    { key:"driveType",    label:"구동 (Drive)",         unit:""        },
+    { key:"motorPower",   label:"모터 (Power)",         unit:"kW"      },
+  ],
   // Pump 계열
   Pump: [
     { key:"kindOfLiquid",   label:"Kind of Liquid",        unit:""        },
@@ -2186,8 +2248,15 @@ const DEFAULT_SPEC_FIELDS = [
 ];
 
 // 설비 유형에 맞는 사양 필드 반환
-const getSpecFields = (equipType) =>
-  EQUIP_SPEC_FIELDS[equipType] || DEFAULT_SPEC_FIELDS;
+const getSpecFields = (equipType) => {
+  // v10.17: Line형 Equipment 변형 매핑 (공통 필드셋 공유)
+  if (equipType==="Cold Gas Duct" || equipType==="Hot Gas Pipe")
+    return EQUIP_SPEC_FIELDS["Hot Gas Duct"];
+  if (equipType==="Chain Conveyor" || equipType==="Pipe Conveyor" ||
+      equipType==="Bucket Conveyor" || equipType==="Conveyor")
+    return EQUIP_SPEC_FIELDS["Belt Conveyor"];
+  return EQUIP_SPEC_FIELDS[equipType] || DEFAULT_SPEC_FIELDS;
+};
 let _idCnt = 1;
 const uid = (p="n") => `${p}_${Date.now()}_${_idCnt++}`;
 
@@ -4346,6 +4415,11 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
   );
 
   const isSpecialLine = !isNode && (d.lineType==="Process Gas"||d.lineType==="Material");
+  // v10.17: Duct/Conveyor = Equipment 성격 라인 (Item No. + 사양 입력 대상)
+  const isItemLine = !isNode && (
+    d.lineType==="Hot Gas Duct" || d.lineType==="Cold Gas Duct" || d.lineType==="Hot Gas Pipe" ||
+    (d.lineType||"").endsWith("Conveyor")
+  );
 
   return (
     <div style={{ width:270,background:"#fff",borderLeft:"1px solid #e2e8f0",overflowY:"auto",flexShrink:0,display:"flex",flexDirection:"column" }}>
@@ -4572,6 +4646,75 @@ const Inspector = memo(({ sel,nodes,edges,onUpdateNode,onUpdateEdge,onDeleteSel,
                 <select style={S} value={d.lineType||"Piping"} onChange={e=>upE("lineType",e.target.value)}>
                   {[...CONNECTION_LIST,...CONVEYOR_LIST].map(c=><option key={c}>{c}</option>)}
                 </select>
+
+                {/* v10.17: Duct/Conveyor = Equipment 성격 → Item No + 사양 입력 */}
+                {isItemLine && (
+                  <>
+                    <div style={{ fontWeight:600,fontSize:11,color:"#b45309",margin:"8px 0 5px",borderTop:"2px solid #fff7ed",paddingTop:6,display:"flex",alignItems:"center",gap:4 }}>
+                      <span>🏷 Item (Equipment 성격)</span>
+                      <span style={{ fontSize:9,background:"#fff7ed",color:"#b45309",borderRadius:3,padding:"1px 5px",fontWeight:400 }}>{d.lineType}</span>
+                    </div>
+                    <label style={L}>Item No</label>
+                    <input style={I} value={d.itemNo||""} onChange={e=>upE("itemNo",e.target.value)} placeholder="e.g. 261L11"/>
+                    <label style={L}>명칭 (라인 위 표시)</label>
+                    <input style={I} value={d.lineText||""} onChange={e=>upE("lineText",e.target.value)} placeholder={d.lineType}/>
+
+                    <div style={{ fontWeight:600,fontSize:11,color:"#1d4ed8",margin:"8px 0 5px",borderTop:"2px solid #eff6ff",paddingTop:6 }}>
+                      ⚙ Engineering Spec
+                    </div>
+                    {(() => {
+                      const standardFields = getSpecFields(d.lineType);
+                      const stdKeyMap = new Map(standardFields.map(f => [f.key, f]));
+                      const reserved = new Set([
+                        "label","itemNo","lineType","lineText","equipType","handles","waypoints",
+                        "serialNo","size","sizeNum","spec","fluidPrimary","fluidSub","_dragging",
+                        "ic_no","ic_status","ic_priority","ic_due","ic_closed","ic_resp_from",
+                        "ic_resp_to","ic_remark","icd_no","ifType","icd_status","tq_no","tq_status",
+                        "openItems","icd_ifaDate","icd_ifcDate","requirements","summary",
+                        "sos","poscoStaff","engStaff","wbsCode","teamId","discipline",
+                        "scopeText","inclusions","exclusions","vendorName","vendorCountry",
+                        "vendorContract","vendorICA",
+                      ]);
+                      const dataKeys = Object.keys(d||{}).filter(k => !reserved.has(k) && d[k]!=null && d[k]!=="");
+                      const seen = new Set(); const result = [];
+                      dataKeys.forEach(k => {
+                        if (stdKeyMap.has(k)) result.push(stdKeyMap.get(k));
+                        else result.push({ key:k, label:k, unit:"", _imported:true });
+                        seen.add(k);
+                      });
+                      standardFields.forEach(f => { if (!seen.has(f.key)) result.push(f); });
+                      // 가스 성분 합계 검증 (Gas Duct/Pipe)
+                      const isGas = d.lineType!=="" && (d.lineType?.includes("Gas"));
+                      let compSum = null;
+                      if (isGas) {
+                        const ks = ["gasComp_H2","gasComp_CO","gasComp_CO2","gasComp_N2","gasComp_H2O","gasComp_etc"];
+                        compSum = ks.reduce((s,k)=> s + (parseFloat(d[k])||0), 0);
+                      }
+                      return (
+                        <>
+                          {result.map(({key,label,unit,_imported})=>(
+                            <div key={key} style={{ marginBottom:5 }}>
+                              <label style={{ ...L, marginBottom:1, display:"flex", alignItems:"center", gap:4 }}>
+                                <span>{label}</span>
+                                {unit && <span style={{ color:"#94a3b8",fontWeight:400,fontSize:10 }}>{unit}</span>}
+                                {_imported && <span style={{ fontSize:9,background:"#fef3c7",color:"#92400e",borderRadius:3,padding:"0 4px",marginLeft:"auto",fontWeight:600 }}>imported</span>}
+                              </label>
+                              <input style={{ ...I, marginBottom:0 }} value={d[key]||""}
+                                onChange={e=>upE(key, e.target.value)} placeholder={unit||""}/>
+                            </div>
+                          ))}
+                          {compSum!==null && (
+                            <div style={{ fontSize:10.5, marginTop:4, padding:"4px 8px", borderRadius:5,
+                              background: Math.abs(compSum-100)<0.5 ? "#dcfce7" : "#fef2f2",
+                              color: Math.abs(compSum-100)<0.5 ? "#15803d" : "#dc2626", fontWeight:700 }}>
+                              가스 성분 합계: {compSum.toFixed(1)} vol% {Math.abs(compSum-100)<0.5 ? "✓ (100%)" : "⚠ 100%가 아닙니다"}
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
 
                 {/* 경유점(Route) 관리 */}
                 {(d.waypoints?.length>0) && (
