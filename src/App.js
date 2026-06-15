@@ -2731,7 +2731,7 @@ const EquipmentNode = memo(({ id, data, selected }) => {
     <div style={{
       background:selected?"#eff6ff":"#ffffff",
       border:`${selected?2:1.5}px solid ${selected?"#3b82f6":"#cbd5e1"}`,
-      borderRadius:8,minWidth:150,minHeight:72,
+      borderRadius:8,minWidth:110,minHeight:64,
       display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
       padding:"6px 12px 8px",fontSize:11,cursor:"default",
       position:"relative",userSelect:"none",boxSizing:"border-box",
@@ -2741,22 +2741,22 @@ const EquipmentNode = memo(({ id, data, selected }) => {
         <Handle key={pid} type="source" position={posMap[dir]} id={pid} style={getStyle(dir,pct)}/>
       ))}
 
-      {/* ── Item No: 상단 표시 (v10.15: 가독성 위해 3배 확대) ── */}
+      {/* ── Item No: 상단 표시 ── */}
       {editing ? (
         <input ref={inputRef} className="mbse-label-input" value={draft}
           onChange={e=>setDraft(e.target.value)} onBlur={commitEdit}
           onKeyDown={e=>{ if(e.key==="Enter") commitEdit(); if(e.key==="Escape") setEditing(false); }}
           onClick={e=>e.stopPropagation()} placeholder="Item No"
-          style={{ marginBottom:4, fontSize:26, fontWeight:800, textAlign:"center", width:"100%", boxSizing:"border-box" }}/>
+          style={{ marginBottom:4 }}/>
       ) : (
         <div onDoubleClick={startEdit}
-          style={{ fontWeight:800,color:"#1d4ed8",fontSize:30,textAlign:"center",
-                   lineHeight:1.15,cursor:"text",padding:"3px 8px",borderRadius:5,
-                   minWidth:60,marginBottom:5,letterSpacing:0.3,
+          style={{ fontWeight:700,color:"#1d4ed8",fontSize:10,textAlign:"center",
+                   lineHeight:1.2,cursor:"text",padding:"1px 4px",borderRadius:3,
+                   minWidth:60,marginBottom:3,
                    background: data.itemNo?"rgba(29,78,216,0.06)":"transparent",
                    border: data.itemNo?"1px dashed #bfdbfe":"1px dashed transparent" }}
           title="더블클릭으로 Item No 편집">
-          {data.itemNo || <span style={{ color:"#cbd5e1",fontSize:18 }}>Item No</span>}
+          {data.itemNo || <span style={{ color:"#cbd5e1",fontSize:9 }}>Item No</span>}
         </div>
       )}
 
